@@ -7,6 +7,7 @@ test('dashboard renders its empty, policy, and keyboard states', async ({ page }
   await page.goto('/')
   await expect(page).toHaveTitle(/Telemetry Export Receipts/)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(/Every exportleaves proof/)
+  await expect(page.getByRole('link', { name: 'TER. — Telemetry Export Receipts home' })).toBeVisible()
   await expect(page.getByText('No crossings match')).toBeVisible()
   await page.keyboard.press('Tab')
   await expect(page.getByText('Skip to content')).toBeFocused()

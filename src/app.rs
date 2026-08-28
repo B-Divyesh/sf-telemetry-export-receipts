@@ -63,6 +63,15 @@ struct ListQuery {
     limit: Option<u32>,
 }
 
+struct ReceiptFailure {
+    outcome: &'static str,
+    status: StatusCode,
+    code: &'static str,
+    message: &'static str,
+    reason: &'static str,
+    upstream_status: Option<u16>,
+}
+
 #[derive(Serialize)]
 struct PolicyView {
     configured: bool,
@@ -150,50 +159,62 @@ async fn proxy_export(State(state): State<AppState>, request: Request<Body>) -> 
         }
     };
     if !take_rate_token(&state, &requester).await {
-        return receipt_error(
+        return record_failure(
             &state,
             &unparsed_export_request(),
             requester,
-            StatusCode::TOO_MANY_REQUESTS,
-            "rate_limited",
-            "This requester exceeded 60 export attempts per minute.",
-            "Request rate limit exceeded.",
+            ReceiptFailure {
+                outcome: "denied",
+                status: StatusCode::TOO_MANY_REQUESTS,
+                code: "rate_limited",
+                message: "This requester exceeded 60 export attempts per minute.",
+                reason: "Request rate limit exceeded.",
+                upstream_status: None,
+            },
             headers.contains_key(header::AUTHORIZATION),
         )
         .await;
     }
 
-    let mut request = match to_bytes(body, 256 * 1024).await {
-        Ok(body) => match serde_json::from_slice::<ExportRequest>(&body) {
-            Ok(request) => request,
-            Err(_) => {
-                return receipt_error(
-                    &state,
-                    &unparsed_export_request(),
-                    requester,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_json",
-                    "The export request must be valid JSON.",
-                    "Request body was not valid JSON.",
-                    headers.contains_key(header::AUTHORIZATION),
-                )
-                .await
-            }
-        },
-        Err(_) => {
-            return receipt_error(
+    let mut request =
+        match to_bytes(body, 256 * 1024).await {
+            Ok(body) => match serde_json::from_slice::<ExportRequest>(&body) {
+                Ok(request) => request,
+                Err(_) => {
+                    return record_failure(
+                        &state,
+                        &unparsed_export_request(),
+                        requester,
+                        ReceiptFailure {
+                            outcome: "denied",
+                            status: StatusCode::BAD_REQUEST,
+                            code: "invalid_json",
+                            message: "The export request must be valid JSON.",
+                            reason: "Request body was not valid JSON.",
+                            upstream_status: None,
+                        },
+                        headers.contains_key(header::AUTHORIZATION),
+                    )
+                    .await
+                }
+            },
+            Err(_) => return record_failure(
                 &state,
                 &unparsed_export_request(),
                 requester,
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "invalid_request_body",
-                "The export request body could not be read or exceeded 256 KiB.",
-                "Request body could not be read or exceeded the 256 KiB envelope limit.",
+                ReceiptFailure {
+                    outcome: "denied",
+                    status: StatusCode::PAYLOAD_TOO_LARGE,
+                    code: "invalid_request_body",
+                    message: "The export request body could not be read or exceeded 256 KiB.",
+                    reason:
+                        "Request body could not be read or exceeded the 256 KiB envelope limit.",
+                    upstream_status: None,
+                },
                 headers.contains_key(header::AUTHORIZATION),
             )
-            .await
-        }
-    };
+            .await,
+        };
 
     request.method = request.method.to_ascii_uppercase();
     let denial = validate(&state.config, &request);
@@ -225,14 +246,18 @@ async fn proxy_export(State(state): State<AppState>, request: Request<Body>) -> 
     }
 
     let Some(base) = &state.config.upstream_base_url else {
-        return receipt_error(
+        return record_failure(
             &state,
             &request,
             requester,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "upstream_not_configured",
-            "Set TER_UPSTREAM_BASE_URL before proxying exports.",
-            "Approved upstream is not configured.",
+            ReceiptFailure {
+                outcome: "denied",
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "upstream_not_configured",
+                message: "Set TER_UPSTREAM_BASE_URL before proxying exports.",
+                reason: "Approved upstream is not configured.",
+                upstream_status: None,
+            },
             headers.contains_key(header::AUTHORIZATION),
         )
         .await;
@@ -281,17 +306,24 @@ async fn proxy_export(State(state): State<AppState>, request: Request<Body>) -> 
             let body = match response.bytes().await {
                 Ok(bytes) => bytes,
                 Err(_) => {
-                    return receipt_error(
+                    // Headers prove that the export reached the configured
+                    // upstream even if its body fails mid-stream. Keep that
+                    // crossing distinguishable from a policy denial.
+                    return record_failure(
                         &state,
                         &request,
                         requester,
-                        StatusCode::BAD_GATEWAY,
-                        "upstream_read_failed",
-                        "The upstream response could not be read.",
-                        "Upstream response body could not be read.",
+                        ReceiptFailure {
+                            outcome: "upstream_error",
+                            status: StatusCode::BAD_GATEWAY,
+                            code: "upstream_read_failed",
+                            message: "The upstream response could not be read.",
+                            reason: "Upstream response body could not be read.",
+                            upstream_status: Some(status.as_u16()),
+                        },
                         headers.contains_key(header::AUTHORIZATION),
                     )
-                    .await
+                    .await;
                 }
             };
             let outcome = if status.is_success() {
@@ -312,23 +344,21 @@ async fn proxy_export(State(state): State<AppState>, request: Request<Body>) -> 
             }
         }
         Err(_) => {
-            let stored = make_receipt(
+            record_failure(
                 &state,
                 &request,
                 requester,
-                "upstream_error",
-                None,
-                Some("Upstream connection failed".into()),
+                ReceiptFailure {
+                    outcome: "upstream_error",
+                    status: StatusCode::BAD_GATEWAY,
+                    code: "upstream_unavailable",
+                    message: "The approved upstream could not be reached.",
+                    reason: "Upstream connection failed.",
+                    upstream_status: None,
+                },
                 headers.contains_key(header::AUTHORIZATION),
             )
             .await
-            .ok();
-            error(
-                StatusCode::BAD_GATEWAY,
-                "upstream_unavailable",
-                "The approved upstream could not be reached.",
-                stored.map(|v| v.receipt.id),
-            )
         }
     }
 }
@@ -348,28 +378,30 @@ fn unparsed_export_request() -> ExportRequest {
     }
 }
 
-async fn receipt_error(
+async fn record_failure(
     state: &AppState,
     request: &ExportRequest,
     requester: String,
-    status: StatusCode,
-    code: &str,
-    message: &str,
-    reason: &str,
+    failure: ReceiptFailure,
     authorization_forwarded: bool,
 ) -> Response {
     match make_receipt(
         state,
         request,
         requester,
-        "denied",
-        None,
-        Some(reason.into()),
+        failure.outcome,
+        failure.upstream_status,
+        Some(failure.reason.into()),
         authorization_forwarded,
     )
     .await
     {
-        Ok(stored) => error(status, code, message, Some(stored.receipt.id)),
+        Ok(stored) => error(
+            failure.status,
+            failure.code,
+            failure.message,
+            Some(stored.receipt.id),
+        ),
         Err(_) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "receipt_write_failed",
@@ -759,19 +791,27 @@ mod tests {
 
     #[tokio::test]
     async fn truncated_upstream_response_gets_a_signed_failure_receipt() {
-        let upstream = Router::new().route(
-            "/api/logs/export",
-            post(|| async {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header(header::CONTENT_LENGTH, "100")
-                    .body(Body::from("partial-export"))
-                    .unwrap()
-            }),
-        );
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let requests = Arc::new(AtomicUsize::new(0));
+        let upstream_requests = Arc::clone(&requests);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            upstream_requests.fetch_add(1, Ordering::SeqCst);
+            // Deliberately advertise more bytes than are sent, then close the
+            // connection. This is the same mid-body peer failure observed by
+            // the independent verifier and cannot be represented by Axum.
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/csv\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial-export")
+                .await
+                .unwrap();
+            stream.shutdown().await.unwrap();
+        });
 
         let mut config = Config::test();
         config.upstream_base_url = Some(format!("http://{address}"));
@@ -791,6 +831,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            1,
+            "upstream received the export"
+        );
         let value: Value =
             serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap();
         assert_eq!(value["error"]["code"], "upstream_read_failed");
@@ -812,8 +857,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(receipt["requester"], "partial@example.com");
-        assert_eq!(receipt["outcome"], "denied");
-        assert_eq!(receipt["upstream_status"], Value::Null);
+        assert_eq!(receipt["outcome"], "upstream_error");
+        assert_eq!(receipt["upstream_status"], 200);
         assert_eq!(
             receipt["denial_reason"],
             "Upstream response body could not be read."

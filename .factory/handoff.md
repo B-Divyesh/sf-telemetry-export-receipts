@@ -1,58 +1,52 @@
-# Telemetry Export Receipts — verification handoff
+# Telemetry Export Receipts — repair handoff
 
-## Status: FAIL
+## Status: PASS (local verification complete; deployment pending)
 
-Candidate `bfe4d0c2294e3afe35f4757b61fc98ee00b800bc` is **not release-ready**. Independent verification found that an export request already sent to an upstream can receive `502 upstream_read_failed` with `receipt_id: null` and no persisted receipt when the upstream body truncates. This violates the product's core audit guarantee. A current axe/Lighthouse audit also found one serious WCAG 2.5.3 label-in-name issue on the visible `TER.` brand link.
+This repair addresses every release-blocking finding in independent verification report `f64e9361bae84b61b53c3084fdf70141907ed025` for candidate `bfe4d0c2294e3afe35f4757b61fc98ee00b800bc` while retaining the Rust/Axum + SQLite container and Vite/TypeScript frontend artifact.
 
-See [`.factory/verification.md`](verification.md) for exact reproduction evidence, command results, live comparison hashes, and required remediation.
+## Repairs
 
-### Verified blocking defects
+- An identified request is now parsed inside the export route, allowing malformed JSON and unreadable/oversize envelopes to produce a signed, persisted denied-attempt receipt instead of being rejected before the audit boundary.
+- A failed upstream response-body read now persists an `upstream_error` receipt before returning `502`. It records the received upstream status (including `200` for a truncated success response), never the body or credentials. Upstream connection failures use the same mandatory persistence path.
+- The visible `TER.` wordmark is included verbatim in the brand link accessible name: `TER. — Telemetry Export Receipts home`.
 
-- **High:** a deliberately truncated upstream `200` response produced `502` and `receipt_id: null`; ledger count was unchanged after the upstream had received the export request.
-- **Medium:** current Lighthouse/axe reported serious `label-content-name-mismatch` for the `TER.` home link.
+## Regression coverage
 
-The material below is the builder's original implementation handoff. It is retained for run/configuration context and does not override this verification result.
+- `truncated_upstream_response_gets_a_signed_failure_receipt` uses a raw TCP peer that sends `200`, declares `Content-Length: 100`, writes `partial-export`, and closes. It proves the peer received exactly one export request, the proxy returns `502 upstream_read_failed` with a receipt ID, and the persisted signed receipt has requester `partial@example.com`, outcome `upstream_error`, upstream status `200`, and no result body.
+- `malformed_json_from_an_identified_requester_gets_a_signed_receipt` proves invalid JSON is receipted without persisting the submitted secret-like body string.
+- The Playwright dashboard test asserts the exact accessible brand name and runs axe 4.12.1 with no serious/critical findings.
 
-## What shipped
+## Verification evidence (2026-08-28 UTC)
 
-- A Rust/Axum reverse proxy for exact, administrator-approved export endpoints. It enforces requester identity, GET/POST only, time-window and row bounds, declared fields, approved redaction labels, purpose, and a 60-attempt/minute identity limit before contacting the upstream.
-- Existing `Authorization`, `Cookie`, and `Accept` values are forwarded to the fixed configured origin. Redirect following is disabled, so credentials cannot leave that origin through an upstream redirect.
-- SQLite receipts for allowed, policy-denied, and upstream-failed attempts. Receipts contain a versioned policy snapshot, requester, purpose, bounds, fields, SHA-256 query digest, outcome, and HMAC-SHA256 signature. Result bodies and credentials are never written. If persistence fails, a successful upstream result is withheld.
-- JSON, Markdown download, signature verification, filtered ledger, policy, and health endpoints.
-- A responsive operator UI with the product-specific “night-market proof desk” system, original generated gate illustration, live policy board, loading/empty/error/offline states, filterable and keyboard-expandable receipts, integration example, and legal pages.
-- The optional US$49 one-time Fleet archive unlock: hosted Sociobot checkout, return-token capture, local token/verdict storage, once-daily verification, offline cached unlock, restore field, revoked-license handling, and filtered JSON packaging. Core export, receipt, safety, and accessibility behavior remain free.
-- Multi-stage container packaging, non-root runtime, persistent `/app/data` volume with a mode-0600 generated signing key on first boot, structured JSON logs, secure response headers, no runtime CDN/fonts/analytics, and graceful shutdown.
+- Clean dependency install: `npm ci --no-audit --no-fund` passed.
+- Unit/integration: `npm test` passed — Vitest `1/1`; Rust `7/7`, including the raw-socket truncation and malformed-JSON receipt regressions.
+- Types/lint: `npm run check` passed (`tsc --noEmit`; `cargo clippy --all-targets -- -D warnings`).
+- Production artifacts: `npm run build` passed and wrote `dist/`; `cargo build --release --locked` passed.
+- Browser/keyboard/a11y: `npm run test:e2e` passed `2/2`. A local production-binary `verify-url.sh` run returned HTTP 200 in 567 ms with no console/page errors, valid title and `lang=en`, exactly one `h1`, one `main`, zero images without `alt`, and zero unlabeled buttons. Manual Playwright checks at 1440px and 390px found no horizontal overflow; first Tab focused Skip to content. Axe 4.12.1 on the controlled 390px page reported `[]` serious/critical violations.
+- Privacy/response policy: local production `/health` returned `{"build_sha":"repair-local","status":"ok"}` with `no-store`, CSP, `nosniff`, `DENY`, no-referrer, and restrictive Permissions-Policy headers. An identified release-binary request with no configured upstream returned a signed `503 upstream_not_configured` receipt; its receipt records only the bounded request metadata and no body/credentials.
+- Offline/update: after first registration and reload, the service worker controlled the 390px page; `registration.update()` left no waiting/installing worker; an offline reload retained the shell and its heading.
+- Performance budget: built JS is 18,142 B raw / 6.90 kB gzip; CSS is 15,229 B raw / 4.44 kB gzip; mobile WebP is 26,308 B. No third-party fonts/scripts or analytics are loaded. Lighthouse 13.4.1 was invoked against the release binary using Playwright Chromium but the browser tab crashed before producing a report, matching the verifier environment's instability; do not treat a score as measured for this repair.
+- Container packaging: Docker/Podman is unavailable in this worker. The production image is deployed through the factory ACR build after this commit; that build is the container validation path.
 
 ## Run and deploy
 
 ```sh
-npm install
+npm ci --no-audit --no-fund
+npm test
+npm run check
 npm run build
-TER_RECEIPT_SIGNING_KEY=local-secret cargo run
+cargo build --release --locked
+npm run test:e2e
+PORT=8080 target/release/telemetry-export-receipts
 ```
 
-Production configuration is documented in `.env.example` and `README.md`. The container build command is `docker build -t telemetry-export-receipts .`; it serves the frontend and API together on `PORT=8080`. Supply `TER_RECEIPT_SIGNING_KEY` or retain the key generated on first boot. Mount `/app/data` and place the service behind the administrator auth proxy/SSO that strips and injects `TER_IDENTITY_HEADER`.
+The image serves the frontend and API together on `PORT=8080`; it generates and persists an installation signing key when no override is supplied. The factory deployment supplies only `PORT`, so the live policy API remains intentionally unconfigured until an operator supplies the approved upstream configuration and trusted identity-header perimeter.
 
-## Verification performed
+## Known operational follow-up
 
-- `npm test`: passed (1 frontend unit test, 5 Rust unit/integration tests). The integration test uses a real local Axum upstream, asserts body passthrough, fetches the receipt, and confirms result content is absent.
-- `npm run check`: strict TypeScript and Clippy with warnings denied passed.
-- `npm run build`: passed; `dist/index.html` is at the required root. Initial JS is 18.13 KB raw / 6.89 KB gzip; CSS is 15.23 KB raw / 4.44 KB gzip; hero WebP is 61 KB desktop and 26 KB mobile.
-- `npm run test:e2e`: 2 Playwright tests passed in Chromium, including keyboard skip-link behavior, empty state, legal routes, console capture, and axe serious/critical checks.
-- Factory `verify-url.sh`: HTTP 200, title present, `lang=en`, exactly one h1, main landmark present, all images have alt text, and no browser console/page errors.
-- Lighthouse 12.8.2 mobile: Performance 100, Accessibility 100, Best Practices 100, SEO 100; LCP 1.5 s, CLS 0, total blocking time 30 ms.
-- Load smoke: 250 concurrent `/health` requests completed successfully in 1.062 s (~235 requests/s from this development container).
-- `cargo build --release --locked`: passed. A production-mode boot smoke generated a 64-character mode-0600 key in a temporary volume and returned healthy on port 8099. The Dockerfile was inspected but a Docker/Podman daemon was not available in the worker image.
-- Visual screenshots were reviewed at desktop and 390 × 844 px. No text artifacts, brands, or unintended symbols were present in the generated illustration.
-
-## Known gaps / next steps
-
-- Upstream export products use different payload shapes. This v1 defines an explicit narrow adapter contract: the approved endpoint must honor top-level `start_time`, `end_time`, `limit`, `fields`, and `redaction_policy`. Add a product-specific adapter endpoint when the upstream does not support that shape; do not approve a broad arbitrary-query endpoint.
-- Receipt reads rely on the deployment’s administrator SSO/VPN perimeter, by design; this service preserves rather than replaces product authentication. Verify the gateway strips client-supplied identity headers.
-- Rate-limit counters are process-local. Multi-replica deployments should add a shared limiter at the ingress.
-- HMAC verification requires the installation key. Plan and document key rotation if long-lived receipt verification spans rotations.
-- The live checkout verification path is contract-tested in code but was not exercised with a paid license in this disposable worker.
+- The container deployment configuration intentionally provides only `PORT`; therefore live `/api/v1/policy` reports `configured:false`. A non-production configured upstream plus the trusted gateway identity-header injection are required for a live end-to-end export smoke.
+- Receipt reads rely on the deployment's administrator SSO/VPN perimeter. Verify that perimeter strips client-supplied identity headers before production use.
 
 ## Asset provenance
 
-The hero scene was generated on 2026-08-28 with the factory Azure OpenAI image deployment using the prompt recorded in `.factory/design.md`. Source and prompt sidecar are in `assets/src/`; optimized WebP/JPEG derivatives are in `frontend/public/assets/`. The favicon and interface icons are original hand-authored SVG geometry.
+The hero scene was generated on 2026-08-28 with the factory Azure OpenAI image deployment. The prompt, source, and provenance are recorded in `.factory/design.md` and `assets/src/receipt-gate-source.png.json`; optimized derivatives are local under `frontend/public/assets/`. The favicon and interface icons are authored SVG geometry. No third-party visual assets, fonts, analytics, or runtime scripts are used.
