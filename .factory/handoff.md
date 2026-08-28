@@ -1,4 +1,17 @@
-# Telemetry Export Receipts — build handoff
+# Telemetry Export Receipts — verification handoff
+
+## Status: FAIL
+
+Candidate `bfe4d0c2294e3afe35f4757b61fc98ee00b800bc` is **not release-ready**. Independent verification found that an export request already sent to an upstream can receive `502 upstream_read_failed` with `receipt_id: null` and no persisted receipt when the upstream body truncates. This violates the product's core audit guarantee. A current axe/Lighthouse audit also found one serious WCAG 2.5.3 label-in-name issue on the visible `TER.` brand link.
+
+See [`.factory/verification.md`](verification.md) for exact reproduction evidence, command results, live comparison hashes, and required remediation.
+
+### Verified blocking defects
+
+- **High:** a deliberately truncated upstream `200` response produced `502` and `receipt_id: null`; ledger count was unchanged after the upstream had received the export request.
+- **Medium:** current Lighthouse/axe reported serious `label-content-name-mismatch` for the `TER.` home link.
+
+The material below is the builder's original implementation handoff. It is retained for run/configuration context and does not override this verification result.
 
 ## What shipped
 
