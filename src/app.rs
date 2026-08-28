@@ -81,6 +81,7 @@ pub async fn build(config: Config) -> Result<Router, sqlx::Error> {
         db,
         client: reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("valid client"),
         rate: Arc::new(Mutex::new(BTreeMap::new())),
@@ -462,6 +463,7 @@ fn error(status: StatusCode, code: &str, message: &str, receipt_id: Option<Strin
 }
 
 async fn security_headers(request: Request<Body>, next: Next) -> Response {
+    let path = request.uri().path().to_owned();
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
@@ -475,6 +477,18 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response {
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
     headers.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self' https://api.sociobot.in; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://api.sociobot.in"));
+    if !headers.contains_key(header::CACHE_CONTROL) {
+        let value = if path.starts_with("/api/") || path == "/health" {
+            "no-store"
+        } else if path.starts_with("/assets/index-") {
+            "public, max-age=31536000, immutable"
+        } else if path.starts_with("/assets/") || path == "/favicon.svg" {
+            "public, max-age=86400"
+        } else {
+            "no-cache"
+        };
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
+    }
     response
 }
 

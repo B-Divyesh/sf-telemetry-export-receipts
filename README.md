@@ -28,16 +28,17 @@ Copy [`.env.example`](.env.example) into your secret/configuration system. All c
 | `TER_MAX_EXPORT_ROWS` | `10000` | Maximum declared row count |
 | `TER_ALLOWED_REDACTION_POLICIES` | `pii-basic,strict` | Approved policy labels |
 | `TER_IDENTITY_HEADER` | `x-export-user` | Header injected by your trusted auth proxy |
-| `TER_RECEIPT_SIGNING_KEY` | development-only value | HMAC key; mandatory when `TER_APP_ENV=production` |
+| `TER_RECEIPT_SIGNING_KEY` | development-only value | Preferred production HMAC key (at least 32 characters) |
+| `TER_SIGNING_KEY_FILE` | `data/receipt-signing.key` | Production first-boot key file when no environment key is supplied |
 | `TER_BUILD_SHA` | `development` | Returned by `/health` |
 
-Generate a signing key with `openssl rand -hex 32`. Mount `data/` on persistent storage, restrict it to the service user, and back it up according to your audit retention policy. Rotate the key only with a documented verification transition: old HMAC receipts require the old key.
+Generate a signing key with `openssl rand -hex 32`. If none is supplied in production, first boot creates a mode-0600 key in `TER_SIGNING_KEY_FILE`. Mount `data/` on persistent storage, restrict it to the service user, and back up the database and key together according to your audit retention policy. Rotate the key only with a documented verification transition: old HMAC receipts require the old key.
 
 The approved upstream endpoint must document and honor the injected `start_time`, `end_time`, `limit`, `fields`, and `redaction_policy` parameters (as a GET query or top-level POST JSON). Create a narrow adapter endpoint if your vendor uses a different request shape; do not point this service at a broad, arbitrary query route.
 
 ## Run locally
 
-Requirements: Node 22+, Rust 1.85+, and SQLite development libraries.
+Requirements: Node 22+, Rust 1.89+, and SQLite development libraries.
 
 ```sh
 npm install
@@ -86,7 +87,7 @@ npm run test:e2e  # Playwright keyboard, console, routes, and axe checks
 docker build -t telemetry-export-receipts .
 ```
 
-The multi-stage image serves the Vite build and Axum API together on port 8080 as a non-root user. In production, set `TER_APP_ENV=production`, provide `TER_RECEIPT_SIGNING_KEY`, configure an upstream, and mount `/app/data`.
+The multi-stage image serves the Vite build and Axum API together on port 8080 as a non-root user. In production, configure an upstream and mount `/app/data`; provide `TER_RECEIPT_SIGNING_KEY` through your secret manager or securely retain the generated `/app/data/receipt-signing.key`.
 
 ## Paid unlock
 

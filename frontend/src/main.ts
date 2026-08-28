@@ -111,7 +111,7 @@ if (path === '/privacy' || path === '/terms') {
     "redaction_policy": "pii-basic",
     "purpose": "INC-204 response"
   }'</code></pre><p class="code-note"><span>Response headers</span> X-Export-Receipt-Id · X-Export-Receipt-Signature</p></div></section>
-    <section id="license" class="license-section" aria-labelledby="license-title"><div class="license-copy"><p class="eyebrow"><span>04</span> Optional operator unlock</p><h2 id="license-title">Take the whole ledger.</h2><p>The core proxy and individual signed receipts stay free. Fleet archive packages the loaded audit set for an offline review or handoff.</p><ul><li>Bulk JSON archive from current filters</li><li>Portable, no recurring data-volume fee</li><li>One installation license</li></ul></div><div class="license-ticket"><p class="ticket-kicker">Fleet archive</p><p class="price"><strong>$49</strong> <span>once</span></p><p id="license-status">License not installed</p><a id="buy-license" class="button primary" href="https://api.sociobot.in/api/v1/products/telemetry-export-receipts/checkout">Buy one-time license <span>↗</span></a><button id="download-archive" class="button primary" type="button" hidden>${icon('download')} Download JSON archive</button><details><summary>Have a license? Restore it</summary><form id="license-form"><label for="license-token">License token</label><input id="license-token" name="license" autocomplete="off" spellcheck="false"><button type="submit" class="button quiet">Verify license</button></form></details><p class="legal-note">Sociobot/Dodo is merchant of record. Refunds are handled there. <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p></div></section>
+    <section id="license" class="license-section" aria-labelledby="license-title"><div class="license-copy"><p class="eyebrow"><span>04</span> Optional operator unlock</p><h2 id="license-title">Take the audit with you.</h2><p>The core proxy and individual signed receipts stay free. Fleet archive packages the loaded audit set for an offline review or handoff.</p><ul><li>Bulk JSON archive from current filters</li><li>Portable, no recurring data-volume fee</li><li>One installation license</li></ul></div><div class="license-ticket"><p class="ticket-kicker">Fleet archive</p><p class="price"><strong>$49</strong> <span>once</span></p><p id="license-status">License not installed</p><a id="buy-license" class="button primary" href="https://api.sociobot.in/api/v1/products/telemetry-export-receipts/checkout">Buy one-time license <span>↗</span></a><button id="download-archive" class="button primary" type="button" aria-label="Download JSON archive" hidden>${icon('download')} Download JSON archive</button><details><summary>Have a license? Restore it</summary><form id="license-form"><label for="license-token">License token</label><input id="license-token" name="license" autocomplete="off" spellcheck="false"><button type="submit" class="button quiet" aria-label="Verify license">Verify license</button></form></details><p class="legal-note">Sociobot/Dodo is merchant of record. Refunds are handled there. <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p></div></section>
   </main>`, 'desk')
   void initDesk()
 }
@@ -251,7 +251,10 @@ async function checkLicense(force = false) {
   const token = localStorage.getItem(LICENSE_KEY)
   if (!token) return setLicense(false, 'License not installed')
   const cached = safeJson(localStorage.getItem(VERDICT_KEY)) as { valid?: boolean; checked?: number } | null
-  if (!force && cached?.valid && cached.checked && Date.now() - cached.checked < 86_400_000) setLicense(true, 'Fleet archive unlocked')
+  if (!force && cached?.checked && Date.now() - cached.checked < 86_400_000) {
+    setLicense(Boolean(cached.valid), cached.valid ? 'Fleet archive unlocked' : 'License no longer active')
+    return
+  }
   try {
     const response = await fetch(`${API}/products/${SLUG}/verify?license=${encodeURIComponent(token)}`)
     const verdict = await response.json() as { valid: boolean; reason: string }

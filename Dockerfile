@@ -4,7 +4,7 @@ COPY package.json package-lock.json* tsconfig.json vite.config.ts ./
 COPY frontend ./frontend
 RUN npm install --no-audit --no-fund && npm run build
 
-FROM rust:1.85-alpine AS server
+FROM rust:1.89-alpine AS server
 RUN apk add --no-cache musl-dev
 WORKDIR /build
 COPY Cargo.toml Cargo.lock* ./

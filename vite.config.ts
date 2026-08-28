@@ -6,7 +6,7 @@ export default defineConfig({
     outDir: '../dist',
     emptyOutDir: true,
     target: 'es2022',
-    sourcemap: true,
+    sourcemap: false,
   },
   server: {
     proxy: { '/api': 'http://localhost:8080', '/health': 'http://localhost:8080' },

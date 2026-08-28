@@ -1,4 +1,5 @@
-use std::{env, time::Duration};
+use std::{env, fs, io::Write, path::Path, time::Duration};
+use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -17,11 +18,7 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self, String> {
         let production = env::var("TER_APP_ENV").unwrap_or_default() == "production";
-        let signing_key = env::var("TER_RECEIPT_SIGNING_KEY")
-            .unwrap_or_else(|_| "local-development-key-change-me".into());
-        if production && signing_key == "local-development-key-change-me" {
-            return Err("TER_RECEIPT_SIGNING_KEY is required when TER_APP_ENV=production".into());
-        }
+        let signing_key = signing_key(production)?;
 
         Ok(Self {
             port: parse("PORT", 8080)?,
@@ -58,6 +55,51 @@ impl Config {
             signing_key: "test-signing-key".into(),
             build_sha: "test".into(),
         }
+    }
+}
+
+fn signing_key(production: bool) -> Result<String, String> {
+    if let Ok(value) = env::var("TER_RECEIPT_SIGNING_KEY") {
+        if production && value.len() < 32 {
+            return Err("TER_RECEIPT_SIGNING_KEY must contain at least 32 characters".into());
+        }
+        return Ok(value);
+    }
+    if !production {
+        return Ok("local-development-key-change-me".into());
+    }
+
+    let path =
+        env::var("TER_SIGNING_KEY_FILE").unwrap_or_else(|_| "data/receipt-signing.key".into());
+    if let Ok(value) = fs::read_to_string(&path) {
+        let value = value.trim().to_owned();
+        if value.len() >= 32 {
+            return Ok(value);
+        }
+        return Err(format!("{path} contains an invalid signing key"));
+    }
+    if let Some(parent) = Path::new(&path).parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create signing key directory: {e}"))?;
+    }
+    let value = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
+        Ok(mut file) => {
+            file.write_all(value.as_bytes())
+                .map_err(|e| format!("cannot write signing key: {e}"))?;
+            tracing::warn!(key_file = %path, "generated a persistent receipt signing key; back up this file");
+            Ok(value)
+        }
+        Err(_) => fs::read_to_string(&path)
+            .map(|v| v.trim().to_owned())
+            .map_err(|e| format!("cannot create or read signing key: {e}")),
     }
 }
 

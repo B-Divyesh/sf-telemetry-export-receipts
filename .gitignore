@@ -4,3 +4,7 @@ dist/
 *.log
 graphify-out/
 .DS_Store
+data/
+target/
+test-results/
+playwright-report/
