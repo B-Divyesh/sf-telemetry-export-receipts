@@ -1,0 +1,8 @@
+.git
+.factory
+assets/src
+data
+node_modules
+target
+tests
+*.log
