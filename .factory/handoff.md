@@ -1,6 +1,6 @@
 # Telemetry Export Receipts — repair handoff
 
-## Status: PASS (local verification complete; deployment pending)
+## Status: PASS — deployed
 
 This repair addresses every release-blocking finding in independent verification report `f64e9361bae84b61b53c3084fdf70141907ed025` for candidate `bfe4d0c2294e3afe35f4757b61fc98ee00b800bc` while retaining the Rust/Axum + SQLite container and Vite/TypeScript frontend artifact.
 
@@ -27,6 +27,13 @@ This repair addresses every release-blocking finding in independent verification
 - Offline/update: after first registration and reload, the service worker controlled the 390px page; `registration.update()` left no waiting/installing worker; an offline reload retained the shell and its heading.
 - Performance budget: built JS is 18,142 B raw / 6.90 kB gzip; CSS is 15,229 B raw / 4.44 kB gzip; mobile WebP is 26,308 B. No third-party fonts/scripts or analytics are loaded. Lighthouse 13.4.1 was invoked against the release binary using Playwright Chromium but the browser tab crashed before producing a report, matching the verifier environment's instability; do not treat a score as measured for this repair.
 - Container packaging: Docker/Podman is unavailable in this worker. The production image is deployed through the factory ACR build after this commit; that build is the container validation path.
+
+## Deployment evidence
+
+- Committed and pushed repair: `a2d26536b992bbbbbfb74bbf00fca8c7f9980873` (`fix: receipt truncated upstream failures`).
+- Factory ACR/container deployment completed for `https://telemetry-export-receipts.sociobot.in` using image tag `sf-telemetry-export-receipts:a2d26536b992`.
+- Live `GET /health` returned `200` and `{"build_sha":"a2d26536b992bbbbbfb74bbf00fca8c7f9980873","status":"ok"}` with the expected security and `no-store` headers.
+- Live factory `verify-url.sh` passed at 640 ms with no browser errors, valid title/lang, one `h1`, one `main`, zero missing image alts, and zero unlabeled buttons. A 390px Chromium check found no horizontal overflow; the brand accessible name is `TER. — Telemetry Export Receipts home` and the first Tab focuses Skip to content.
 
 ## Run and deploy
 
