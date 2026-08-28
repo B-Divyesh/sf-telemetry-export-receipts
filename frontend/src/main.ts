@@ -53,7 +53,7 @@ const path = location.pathname
 function shell(content: string, page: string) {
   app.innerHTML = `
     <header class="site-header">
-      <a class="brand" href="/" aria-label="Telemetry Export Receipts home"><span class="brand-mark">${icon('gate')}</span><span>TER<span class="brand-dot">.</span></span></a>
+      <a class="brand" href="/" aria-label="TER. — Telemetry Export Receipts home"><span class="brand-mark">${icon('gate')}</span><span>TER<span class="brand-dot">.</span></span></a>
       <nav aria-label="Primary"><a ${page === 'desk' ? 'aria-current="page"' : ''} href="/">Receipt desk</a><a href="/#integration">Integrate</a><a href="/#license">License</a></nav>
       <span class="boundary"><i></i> Egress boundary</span>
     </header>

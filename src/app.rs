@@ -1,7 +1,7 @@
 use axum::{
-    body::Body,
+    body::{to_bytes, Body},
     extract::{Path, Query, State},
-    http::{header, HeaderMap, HeaderName, HeaderValue, Request, StatusCode},
+    http::{header, HeaderName, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -117,11 +117,11 @@ async fn policy(State(state): State<AppState>) -> impl IntoResponse {
     })
 }
 
-async fn proxy_export(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(mut request): Json<ExportRequest>,
-) -> Response {
+async fn proxy_export(State(state): State<AppState>, request: Request<Body>) -> Response {
+    // Parse inside the audited route so an identified caller gets a receipt even
+    // when its envelope is malformed or too large for this narrow API contract.
+    let (parts, body) = request.into_parts();
+    let headers = parts.headers;
     let identity_name = match HeaderName::from_bytes(state.config.identity_header.as_bytes()) {
         Ok(name) => name,
         Err(_) => {
@@ -150,13 +150,50 @@ async fn proxy_export(
         }
     };
     if !take_rate_token(&state, &requester).await {
-        return error(
+        return receipt_error(
+            &state,
+            &unparsed_export_request(),
+            requester,
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
             "This requester exceeded 60 export attempts per minute.",
-            None,
-        );
+            "Request rate limit exceeded.",
+            headers.contains_key(header::AUTHORIZATION),
+        )
+        .await;
     }
+
+    let mut request = match to_bytes(body, 256 * 1024).await {
+        Ok(body) => match serde_json::from_slice::<ExportRequest>(&body) {
+            Ok(request) => request,
+            Err(_) => {
+                return receipt_error(
+                    &state,
+                    &unparsed_export_request(),
+                    requester,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_json",
+                    "The export request must be valid JSON.",
+                    "Request body was not valid JSON.",
+                    headers.contains_key(header::AUTHORIZATION),
+                )
+                .await
+            }
+        },
+        Err(_) => {
+            return receipt_error(
+                &state,
+                &unparsed_export_request(),
+                requester,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "invalid_request_body",
+                "The export request body could not be read or exceeded 256 KiB.",
+                "Request body could not be read or exceeded the 256 KiB envelope limit.",
+                headers.contains_key(header::AUTHORIZATION),
+            )
+            .await
+        }
+    };
 
     request.method = request.method.to_ascii_uppercase();
     let denial = validate(&state.config, &request);
@@ -188,12 +225,17 @@ async fn proxy_export(
     }
 
     let Some(base) = &state.config.upstream_base_url else {
-        return error(
+        return receipt_error(
+            &state,
+            &request,
+            requester,
             StatusCode::SERVICE_UNAVAILABLE,
             "upstream_not_configured",
             "Set TER_UPSTREAM_BASE_URL before proxying exports.",
-            None,
-        );
+            "Approved upstream is not configured.",
+            headers.contains_key(header::AUTHORIZATION),
+        )
+        .await;
     };
     request
         .query
@@ -239,12 +281,17 @@ async fn proxy_export(
             let body = match response.bytes().await {
                 Ok(bytes) => bytes,
                 Err(_) => {
-                    return error(
+                    return receipt_error(
+                        &state,
+                        &request,
+                        requester,
                         StatusCode::BAD_GATEWAY,
                         "upstream_read_failed",
                         "The upstream response could not be read.",
-                        None,
+                        "Upstream response body could not be read.",
+                        headers.contains_key(header::AUTHORIZATION),
                     )
+                    .await
                 }
             };
             let outcome = if status.is_success() {
@@ -283,6 +330,52 @@ async fn proxy_export(
                 stored.map(|v| v.receipt.id),
             )
         }
+    }
+}
+
+fn unparsed_export_request() -> ExportRequest {
+    let now = Utc::now();
+    ExportRequest {
+        endpoint: "(unparsed request)".into(),
+        method: "UNPARSED".into(),
+        start: now,
+        end: now,
+        row_limit: 0,
+        fields: Vec::new(),
+        redaction_policy: "(unparsed request)".into(),
+        purpose: "Unparsed export request".into(),
+        query: BTreeMap::new(),
+    }
+}
+
+async fn receipt_error(
+    state: &AppState,
+    request: &ExportRequest,
+    requester: String,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    reason: &str,
+    authorization_forwarded: bool,
+) -> Response {
+    match make_receipt(
+        state,
+        request,
+        requester,
+        "denied",
+        None,
+        Some(reason.into()),
+        authorization_forwarded,
+    )
+    .await
+    {
+        Ok(stored) => error(status, code, message, Some(stored.receipt.id)),
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "receipt_write_failed",
+            "The export attempt could not be recorded.",
+            None,
+        ),
     }
 }
 
@@ -620,5 +713,110 @@ mod tests {
         assert_eq!(receipt_json["outcome"], "allowed");
         assert_eq!(receipt_json["policy"]["result_body_recorded"], false);
         assert!(!String::from_utf8_lossy(&receipt_bytes).contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn malformed_json_from_an_identified_requester_gets_a_signed_receipt() {
+        let router = app().await;
+        let malformed_body = "{ definitely not JSON; private-token";
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/exports")
+                    .header("content-type", "application/json")
+                    .header("x-export-user", "malformed@example.com")
+                    .body(Body::from(malformed_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap();
+        assert_eq!(value["error"]["code"], "invalid_json");
+        let id = value["receipt_id"].as_str().expect("receipt id");
+
+        let receipt_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/receipts/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let receipt_bytes = to_bytes(receipt_response.into_body(), 64_000)
+            .await
+            .unwrap();
+        let receipt: Value = serde_json::from_slice(&receipt_bytes).unwrap();
+        assert_eq!(receipt["requester"], "malformed@example.com");
+        assert_eq!(receipt["outcome"], "denied");
+        assert_eq!(receipt["denial_reason"], "Request body was not valid JSON.");
+        assert!(!String::from_utf8_lossy(&receipt_bytes).contains("private-token"));
+    }
+
+    #[tokio::test]
+    async fn truncated_upstream_response_gets_a_signed_failure_receipt() {
+        let upstream = Router::new().route(
+            "/api/logs/export",
+            post(|| async {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_LENGTH, "100")
+                    .body(Body::from("partial-export"))
+                    .unwrap()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+
+        let mut config = Config::test();
+        config.upstream_base_url = Some(format!("http://{address}"));
+        let router = build(config).await.unwrap();
+        let body = json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:30:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"incident review"});
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/exports")
+                    .header("content-type", "application/json")
+                    .header("x-export-user", "partial@example.com")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap();
+        assert_eq!(value["error"]["code"], "upstream_read_failed");
+        let id = value["receipt_id"].as_str().expect("receipt id");
+
+        let receipt_response = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/receipts/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let receipt: Value = serde_json::from_slice(
+            &to_bytes(receipt_response.into_body(), 64_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["requester"], "partial@example.com");
+        assert_eq!(receipt["outcome"], "denied");
+        assert_eq!(receipt["upstream_status"], Value::Null);
+        assert_eq!(
+            receipt["denial_reason"],
+            "Upstream response body could not be read."
+        );
     }
 }
