@@ -1,41 +1,28 @@
-# Telemetry Export Receipts — repair handoff
+# Telemetry Export Receipts — independent QA handoff
 
-## Status: PASS — deployed
+## Status: FAIL
 
-This repair addresses every release-blocking finding in independent verification report `f64e9361bae84b61b53c3084fdf70141907ed025` for candidate `bfe4d0c2294e3afe35f4757b61fc98ee00b800bc` while retaining the Rust/Axum + SQLite container and Vite/TypeScript frontend artifact.
+Candidate `89c53799e0091008b6aa94be63e2c47232fd70bc` was independently tested from a fresh clone against <https://telemetry-export-receipts.sociobot.in> on 2026-08-28. Product code was not changed. The full evidence and reproduction details are in `.factory/verification-3.md`.
 
-## Repairs
+## Release blockers
 
-- An identified request is now parsed inside the export route, allowing malformed JSON and unreadable/oversize envelopes to produce a signed, persisted denied-attempt receipt instead of being rejected before the audit boundary.
-- A failed upstream response-body read now persists an `upstream_error` receipt before returning `502`. It records the received upstream status (including `200` for a truncated success response), never the body or credentials. Upstream connection failures use the same mandatory persistence path.
-- The visible `TER.` wordmark is included verbatim in the brand link accessible name: `TER. — Telemetry Export Receipts home`.
+- **Critical:** live receipt state is inconsistent. A newly acknowledged receipt returned 200 on only 6/20 immediate reads and 404 on 14/20; ledger reads alternated between 50 and zero entries. The deployment appears to serve isolated SQLite state across replicas, defeating the core audit guarantee.
+- **High:** rate limiting does not cover policy/receipt APIs; 200 policy requests all returned 200. Export limiting begins on request 61 but omits `Retry-After` and is keyed by requester identity rather than the first trusted `X-Forwarded-For` hop.
+- **High:** valid GET exports fail locally with 502 before the upstream is contacted. Exact-boundary POST works.
+- **High:** the public live deployment exposes receipt metadata anonymously and accepts a caller-supplied identity header without the documented SSO/VPN/header-sanitizing perimeter.
 
-## Regression coverage
+Additional findings: several mobile/desktop links are under 44 px high; `npm audit` reports high Vite and critical Vitest development-tool advisories; startup does not log persisted/supplied configuration provenance; live responses omit HSTS.
 
-- `truncated_upstream_response_gets_a_signed_failure_receipt` uses a raw TCP peer that sends `200`, declares `Content-Length: 100`, writes `partial-export`, and closes. It proves the peer received exactly one export request, the proxy returns `502 upstream_read_failed` with a receipt ID, and the persisted signed receipt has requester `partial@example.com`, outcome `upstream_error`, upstream status `200`, and no result body.
-- `malformed_json_from_an_identified_requester_gets_a_signed_receipt` proves invalid JSON is receipted without persisting the submitted secret-like body string.
-- The Playwright dashboard test asserts the exact accessible brand name and runs axe 4.12.1 with no serious/critical findings.
+## What passed
 
-## Verification evidence (2026-08-28 UTC)
+- Clean `npm ci`, `npm test` (1 frontend + 7 Rust), `npm run check`, `npm run build`, `cargo build --release --locked`, and `npm run test:e2e` (2/2).
+- Normal bounded POST forwarding, signed JSON/Markdown receipts, HMAC verification, malformed/oversize/denied request receipts, repaired truncated-body receipt handling, credential/result-body non-persistence, restart persistence in one local database, and a 100-request concurrency smoke.
+- Live `/health` reports the exact candidate SHA. Rebuilt HTML, JS, CSS, service worker, icons, and images are byte-identical to live.
+- Desktop and 390 px browser checks, keyboard operation, visible focus, online error-free load, zero serious/critical axe 4.12.1 findings, reduced motion, error recovery, legal pages, service-worker update, and offline reload.
+- Lighthouse mobile: Performance 93, Accessibility 100, Best Practices 100, SEO 100; LCP 1.4 s and CLS 0. Bundles remain well below contract budgets.
+- Privacy scan found no analytics/CDN runtime, and SQLite did not contain forwarded credentials, result bodies, or raw query values. Sociobot license verification rate limiting passed with 429 and `Retry-After`.
 
-- Clean dependency install: `npm ci --no-audit --no-fund` passed.
-- Unit/integration: `npm test` passed — Vitest `1/1`; Rust `7/7`, including the raw-socket truncation and malformed-JSON receipt regressions.
-- Types/lint: `npm run check` passed (`tsc --noEmit`; `cargo clippy --all-targets -- -D warnings`).
-- Production artifacts: `npm run build` passed and wrote `dist/`; `cargo build --release --locked` passed.
-- Browser/keyboard/a11y: `npm run test:e2e` passed `2/2`. A local production-binary `verify-url.sh` run returned HTTP 200 in 567 ms with no console/page errors, valid title and `lang=en`, exactly one `h1`, one `main`, zero images without `alt`, and zero unlabeled buttons. Manual Playwright checks at 1440px and 390px found no horizontal overflow; first Tab focused Skip to content. Axe 4.12.1 on the controlled 390px page reported `[]` serious/critical violations.
-- Privacy/response policy: local production `/health` returned `{"build_sha":"repair-local","status":"ok"}` with `no-store`, CSP, `nosniff`, `DENY`, no-referrer, and restrictive Permissions-Policy headers. An identified release-binary request with no configured upstream returned a signed `503 upstream_not_configured` receipt; its receipt records only the bounded request metadata and no body/credentials.
-- Offline/update: after first registration and reload, the service worker controlled the 390px page; `registration.update()` left no waiting/installing worker; an offline reload retained the shell and its heading.
-- Performance budget: built JS is 18,142 B raw / 6.90 kB gzip; CSS is 15,229 B raw / 4.44 kB gzip; mobile WebP is 26,308 B. No third-party fonts/scripts or analytics are loaded. Lighthouse 13.4.1 was invoked against the release binary using Playwright Chromium but the browser tab crashed before producing a report, matching the verifier environment's instability; do not treat a score as measured for this repair.
-- Container packaging: Docker/Podman is unavailable in this worker. The production image is deployed through the factory ACR build after this commit; that build is the container validation path.
-
-## Deployment evidence
-
-- Committed and pushed repair: `a2d26536b992bbbbbfb74bbf00fca8c7f9980873` (`fix: receipt truncated upstream failures`).
-- Factory ACR/container deployment completed for `https://telemetry-export-receipts.sociobot.in` using image tag `sf-telemetry-export-receipts:a2d26536b992`.
-- Live `GET /health` returned `200` and `{"build_sha":"a2d26536b992bbbbbfb74bbf00fca8c7f9980873","status":"ok"}` with the expected security and `no-store` headers.
-- Live factory `verify-url.sh` passed at 640 ms with no browser errors, valid title/lang, one `h1`, one `main`, zero missing image alts, and zero unlabeled buttons. A 390px Chromium check found no horizontal overflow; the brand accessible name is `TER. — Telemetry Export Receipts home` and the first Tab focuses Skip to content.
-
-## Run and deploy
+## Verification commands
 
 ```sh
 npm ci --no-audit --no-fund
@@ -44,16 +31,14 @@ npm run check
 npm run build
 cargo build --release --locked
 npm run test:e2e
-PORT=8080 target/release/telemetry-export-receipts
 ```
 
-The image serves the frontend and API together on `PORT=8080`; it generates and persists an installation signing key when no override is supplied. The factory deployment supplies only `PORT`, so the live policy API remains intentionally unconfigured until an operator supplies the approved upstream configuration and trusted identity-header perimeter.
+Docker and Podman were unavailable in the verifier, so a fresh local image build was not run. The release binary was exercised directly, and the deployed build identity plus byte-for-byte frontend comparison confirms that live serves this candidate.
 
-## Known operational follow-up
+## Required next steps
 
-- The container deployment configuration intentionally provides only `PORT`; therefore live `/api/v1/policy` reports `configured:false`. A non-production configured upstream plus the trusted gateway identity-header injection are required for a live end-to-end export smoke.
-- Receipt reads rely on the deployment's administrator SSO/VPN perimeter. Verify that perimeter strips client-supplied identity headers before production use.
-
-## Asset provenance
-
-The hero scene was generated on 2026-08-28 with the factory Azure OpenAI image deployment. The prompt, source, and provenance are recorded in `.factory/design.md` and `assets/src/receipt-gate-source.png.json`; optimized derivatives are local under `frontend/public/assets/`. The favicon and interface icons are authored SVG geometry. No third-party visual assets, fonts, analytics, or runtime scripts are used.
+1. Use durable shared receipt/key storage across every serving replica and verify reads and signatures through the live balancer and after restart.
+2. Implement mandatory forwarded-IP API limiting with `Retry-After` on every 429.
+3. Fix GET query serialization and cover it with a real HTTP upstream integration test.
+4. Install the documented trusted administrator perimeter on the public deployment.
+5. Resolve the medium/low target-size, dependency-audit, startup-log, and HSTS findings, then rerun independent verification.
