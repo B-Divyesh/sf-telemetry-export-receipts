@@ -1,4 +1,4 @@
-use std::{env, fs, io::Write, path::Path, time::Duration};
+use std::{env, fs, io::Write, path::PathBuf, time::Duration};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -12,21 +12,55 @@ pub struct Config {
     pub allowed_redactions: Vec<String>,
     pub identity_header: String,
     pub signing_key: String,
+    pub admin_token: String,
     pub build_sha: String,
+    pub provenance: ConfigProvenance,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConfigProvenance {
+    pub database: &'static str,
+    pub signing_key: &'static str,
+    pub admin_token: &'static str,
+    pub upstream: &'static str,
+}
+
+struct Secret {
+    value: String,
+    source: &'static str,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self, String> {
-        let production = env::var("TER_APP_ENV").unwrap_or_default() == "production";
-        let signing_key = signing_key(production)?;
+        let state_dir = default_state_dir();
+        let default_database = format!(
+            "sqlite://{}?mode=rwc",
+            state_dir.join("receipts.db").display()
+        );
+        let (database_url, database_source) = match env::var("DATABASE_URL") {
+            Ok(value) => (value, "supplied"),
+            Err(_) => (default_database, "default durable path"),
+        };
+        let signing = load_or_create_secret(
+            "TER_RECEIPT_SIGNING_KEY",
+            "TER_SIGNING_KEY_FILE",
+            state_dir.join("receipt-signing.key"),
+            "receipt signing key",
+        )?;
+        let admin = load_or_create_secret(
+            "TER_ADMIN_TOKEN",
+            "TER_ADMIN_TOKEN_FILE",
+            state_dir.join("admin-access.key"),
+            "administrator access token",
+        )?;
+        let upstream_base_url = env::var("TER_UPSTREAM_BASE_URL")
+            .ok()
+            .map(|v| v.trim_end_matches('/').to_string());
 
         Ok(Self {
             port: parse("PORT", 8080)?,
-            database_url: env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "sqlite://data/receipts.db?mode=rwc".into()),
-            upstream_base_url: env::var("TER_UPSTREAM_BASE_URL")
-                .ok()
-                .map(|v| v.trim_end_matches('/').to_string()),
+            database_url,
+            upstream_base_url: upstream_base_url.clone(),
             allowed_paths: csv(
                 "TER_ALLOWED_EXPORT_PATHS",
                 "/api/logs/export,/api/traces/export,/api/metrics/export",
@@ -37,8 +71,19 @@ impl Config {
             identity_header: env::var("TER_IDENTITY_HEADER")
                 .unwrap_or_else(|_| "x-export-user".into())
                 .to_ascii_lowercase(),
-            signing_key,
+            signing_key: signing.value,
+            admin_token: admin.value,
             build_sha: env::var("TER_BUILD_SHA").unwrap_or_else(|_| "development".into()),
+            provenance: ConfigProvenance {
+                database: database_source,
+                signing_key: signing.source,
+                admin_token: admin.source,
+                upstream: if upstream_base_url.is_some() {
+                    "supplied"
+                } else {
+                    "unset"
+                },
+            },
         })
     }
 
@@ -53,34 +98,59 @@ impl Config {
             allowed_redactions: vec!["pii-basic".into()],
             identity_header: "x-export-user".into(),
             signing_key: "test-signing-key".into(),
+            admin_token: "test-admin-token".into(),
             build_sha: "test".into(),
+            provenance: ConfigProvenance {
+                database: "test",
+                signing_key: "test",
+                admin_token: "test",
+                upstream: "test",
+            },
         }
     }
 }
 
-fn signing_key(production: bool) -> Result<String, String> {
-    if let Ok(value) = env::var("TER_RECEIPT_SIGNING_KEY") {
-        if production && value.len() < 32 {
-            return Err("TER_RECEIPT_SIGNING_KEY must contain at least 32 characters".into());
-        }
-        return Ok(value);
+fn default_state_dir() -> PathBuf {
+    let mounted = PathBuf::from("/data");
+    if mounted.is_dir() {
+        mounted
+    } else {
+        PathBuf::from("data")
     }
-    if !production {
-        return Ok("local-development-key-change-me".into());
+}
+
+fn load_or_create_secret(
+    value_env: &str,
+    file_env: &str,
+    default_path: PathBuf,
+    label: &str,
+) -> Result<Secret, String> {
+    if let Ok(value) = env::var(value_env) {
+        if value.len() < 32 {
+            return Err(format!("{value_env} must contain at least 32 characters"));
+        }
+        return Ok(Secret {
+            value,
+            source: "supplied",
+        });
     }
 
-    let path =
-        env::var("TER_SIGNING_KEY_FILE").unwrap_or_else(|_| "data/receipt-signing.key".into());
+    let path = env::var(file_env)
+        .map(PathBuf::from)
+        .unwrap_or(default_path);
     if let Ok(value) = fs::read_to_string(&path) {
         let value = value.trim().to_owned();
         if value.len() >= 32 {
-            return Ok(value);
+            return Ok(Secret {
+                value,
+                source: "persisted",
+            });
         }
-        return Err(format!("{path} contains an invalid signing key"));
+        return Err(format!("{} contains an invalid secret", path.display()));
     }
-    if let Some(parent) = Path::new(&path).parent() {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create signing key directory: {e}"))?;
+            .map_err(|e| format!("cannot create {} directory: {e}", path.display()))?;
     }
     let value = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let mut options = fs::OpenOptions::new();
@@ -93,13 +163,25 @@ fn signing_key(production: bool) -> Result<String, String> {
     match options.open(&path) {
         Ok(mut file) => {
             file.write_all(value.as_bytes())
-                .map_err(|e| format!("cannot write signing key: {e}"))?;
-            tracing::warn!(key_file = %path, "generated a persistent receipt signing key; back up this file");
-            Ok(value)
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            tracing::warn!(secret_file = %path.display(), %label, "generated persistent secret; back up this file");
+            Ok(Secret {
+                value,
+                source: "generated",
+            })
         }
-        Err(_) => fs::read_to_string(&path)
-            .map(|v| v.trim().to_owned())
-            .map_err(|e| format!("cannot create or read signing key: {e}")),
+        Err(_) => {
+            let value = fs::read_to_string(&path)
+                .map(|v| v.trim().to_owned())
+                .map_err(|e| format!("cannot create or read {}: {e}", path.display()))?;
+            if value.len() < 32 {
+                return Err(format!("{} contains an invalid secret", path.display()));
+            }
+            Ok(Secret {
+                value,
+                source: "persisted",
+            })
+        }
     }
 }
 

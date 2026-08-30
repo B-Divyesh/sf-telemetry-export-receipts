@@ -15,6 +15,13 @@ async fn main() {
         eprintln!("configuration error: {message}");
         std::process::exit(2);
     });
+    tracing::info!(
+        database = config.provenance.database,
+        signing_key = config.provenance.signing_key,
+        admin_token = config.provenance.admin_token,
+        upstream = config.provenance.upstream,
+        "configuration sources"
+    );
     let address = format!("0.0.0.0:{}", config.port);
     let router = app::build(config)
         .await

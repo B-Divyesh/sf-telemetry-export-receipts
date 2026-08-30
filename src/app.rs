@@ -16,6 +16,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 use tower_http::{
     services::{ServeDir, ServeFile},
@@ -34,7 +35,12 @@ pub struct AppState {
     pub config: Config,
     pub db: SqlitePool,
     client: reqwest::Client,
-    rate: Arc<Mutex<BTreeMap<String, (Instant, u32)>>>,
+    rate: Arc<Mutex<BTreeMap<String, RateBucket>>>,
+}
+
+struct RateBucket {
+    tokens: f64,
+    updated: Instant,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,15 +101,29 @@ pub async fn build(config: Config) -> Result<Router, sqlx::Error> {
             .expect("valid client"),
         rate: Arc::new(Mutex::new(BTreeMap::new())),
     };
-    let static_files = ServeDir::new("dist").not_found_service(ServeFile::new("dist/index.html"));
-    Ok(Router::new()
-        .route("/health", get(health))
-        .route("/api/v1/policy", get(policy))
+    let index = ServeFile::new("dist/index.html");
+    let static_files = ServeDir::new("dist").not_found_service(index.clone());
+    let protected_api = Router::new()
         .route("/api/v1/exports", post(proxy_export))
         .route("/api/v1/receipts", get(list_receipts))
         .route("/api/v1/receipts/{id}", get(get_receipt))
         .route("/api/v1/receipts/{id}/markdown", get(get_receipt_markdown))
         .route("/api/v1/receipts/{id}/verify", get(verify_receipt))
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
+    let api = Router::new()
+        .route("/api/v1/policy", get(policy))
+        .merge(protected_api)
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            api_rate_limit,
+        ));
+    Ok(Router::new()
+        .route("/health", get(health))
+        .merge(api)
+        .route_service("/", index.clone())
+        .route_service("/demo", index.clone())
+        .route_service("/privacy", index.clone())
+        .route_service("/terms", index)
         .fallback_service(static_files)
         .layer(middleware::from_fn(security_headers))
         .layer(TraceLayer::new_for_http())
@@ -158,24 +178,6 @@ async fn proxy_export(State(state): State<AppState>, request: Request<Body>) -> 
             )
         }
     };
-    if !take_rate_token(&state, &requester).await {
-        return record_failure(
-            &state,
-            &unparsed_export_request(),
-            requester,
-            ReceiptFailure {
-                outcome: "denied",
-                status: StatusCode::TOO_MANY_REQUESTS,
-                code: "rate_limited",
-                message: "This requester exceeded 60 export attempts per minute.",
-                reason: "Request rate limit exceeded.",
-                upstream_status: None,
-            },
-            headers.contains_key(header::AUTHORIZATION),
-        )
-        .await;
-    }
-
     let mut request =
         match to_bytes(body, 256 * 1024).await {
             Ok(body) => match serde_json::from_slice::<ExportRequest>(&body) {
@@ -294,7 +296,7 @@ async fn proxy_export(State(state): State<AppState>, request: Request<Body>) -> 
         }
     }
     upstream = if request.method == "GET" {
-        upstream.query(&request.query)
+        upstream.query(&get_query_pairs(&request.query))
     } else {
         upstream.json(&request.query)
     };
@@ -569,14 +571,118 @@ async fn verify_receipt(State(state): State<AppState>, Path(id): Path<String>) -
     }
 }
 
-async fn take_rate_token(state: &AppState, identity: &str) -> bool {
-    let mut rates = state.rate.lock().await;
-    let entry = rates.entry(identity.into()).or_insert((Instant::now(), 0));
-    if entry.0.elapsed() >= Duration::from_secs(60) {
-        *entry = (Instant::now(), 0);
+fn get_query_pairs(query: &BTreeMap<String, Value>) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    for (key, value) in query {
+        match value {
+            Value::Null => {}
+            Value::Array(values) => {
+                for value in values {
+                    pairs.push((key.clone(), query_value(value)));
+                }
+            }
+            value => pairs.push((key.clone(), query_value(value))),
+        }
     }
-    entry.1 += 1;
-    entry.1 <= 60
+    pairs
+}
+
+fn query_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
+        value => serde_json::to_string(value).expect("JSON value is serializable"),
+    }
+}
+
+async fn require_admin(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let supplied = request
+        .headers()
+        .get("x-ter-admin-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let expected = state.config.admin_token.as_bytes();
+    let accepted =
+        supplied.len() == expected.len() && bool::from(supplied.as_bytes().ct_eq(expected));
+    if !accepted {
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "admin_access_required",
+            "Supply the administrator access token in X-TER-Admin-Token.",
+            None,
+        );
+    }
+    next.run(request).await
+}
+
+async fn api_rate_limit(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let is_export = request.uri().path() == "/api/v1/exports";
+    let (capacity, refill_per_second, class) = if is_export {
+        (20.0, 5.0, "export")
+    } else {
+        (40.0, 20.0, "read")
+    };
+    let client = first_forwarded_for(request.headers());
+    let key = format!("{class}:{client}");
+    let retry_after = {
+        let mut rates = state.rate.lock().await;
+        let now = Instant::now();
+        let bucket = rates.entry(key).or_insert(RateBucket {
+            tokens: capacity,
+            updated: now,
+        });
+        let elapsed = now.duration_since(bucket.updated).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(capacity);
+        bucket.updated = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            None
+        } else {
+            Some(((1.0 - bucket.tokens) / refill_per_second).ceil().max(1.0) as u64)
+        }
+    };
+    if let Some(seconds) = retry_after {
+        let mut response = error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "Too many requests from this client. Retry after the stated delay.",
+            None,
+        );
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            HeaderValue::from_str(&seconds.to_string()).expect("valid retry delay"),
+        );
+        return response;
+    }
+    next.run(request).await
+}
+
+fn first_forwarded_for(headers: &axum::http::HeaderMap) -> String {
+    let candidate = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .unwrap_or_default();
+    candidate
+        .parse::<std::net::IpAddr>()
+        .map(|ip| ip.to_string())
+        .or_else(|_| {
+            candidate
+                .parse::<std::net::SocketAddr>()
+                .map(|address| address.ip().to_string())
+        })
+        .unwrap_or_else(|_| "unknown".into())
 }
 
 fn error(status: StatusCode, code: &str, message: &str, receipt_id: Option<String>) -> Response {
@@ -590,6 +696,15 @@ fn error(status: StatusCode, code: &str, message: &str, receipt_id: Option<Strin
 async fn security_headers(request: Request<Body>, next: Next) -> Response {
     let path = request.uri().path().to_owned();
     let mut response = next.run(request).await;
+    let is_known_page = matches!(path.as_str(), "/" | "/demo" | "/privacy" | "/terms");
+    let is_html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
+    if is_html && !is_known_page {
+        *response.status_mut() = StatusCode::NOT_FOUND;
+    }
     let headers = response.headers_mut();
     headers.insert(
         "x-content-type-options",
@@ -597,6 +712,10 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response {
     );
     headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
     headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    headers.insert(
+        "strict-transport-security",
+        HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+    );
     headers.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
@@ -651,8 +770,46 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/exports")
+                    .header("x-ter-admin-token", "test-admin-token")
                     .header("content-type", "application/json")
                     .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn forged_identity_without_admin_access_is_rejected() {
+        let body = json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:30:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"audit review"});
+        let response = app()
+            .await
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/exports")
+                    .header("content-type", "application/json")
+                    .header("x-export-user", "forged@example.com")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap();
+        assert_eq!(value["error"]["code"], "admin_access_required");
+    }
+
+    #[tokio::test]
+    async fn anonymous_receipt_reads_are_rejected() {
+        let response = app()
+            .await
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/receipts")
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await
@@ -670,6 +827,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/exports")
+                    .header("x-ter-admin-token", "test-admin-token")
                     .header("content-type", "application/json")
                     .header("x-export-user", "sam@example.com")
                     .body(Body::from(body.to_string()))
@@ -685,6 +843,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/v1/receipts/{id}/verify"))
+                    .header("x-ter-admin-token", "test-admin-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -713,6 +872,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/exports")
+                    .header("x-ter-admin-token", "test-admin-token")
                     .header("content-type", "application/json")
                     .header("authorization", "Bearer upstream-token")
                     .header("x-export-user", "ada@example.com")
@@ -733,6 +893,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/v1/receipts/{id}"))
+                    .header("x-ter-admin-token", "test-admin-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -748,6 +909,190 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_export_repeats_array_fields_and_reaches_upstream() {
+        use axum::http::Uri;
+
+        let upstream = Router::new().route(
+            "/api/logs/export",
+            get(|uri: Uri| async move { (StatusCode::OK, uri.query().unwrap_or("").to_owned()) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+
+        let mut config = Config::test();
+        config.upstream_base_url = Some(format!("http://{address}"));
+        config.max_range = Duration::from_secs(24 * 3600);
+        config.max_rows = 10_000;
+        let router = build(config).await.unwrap();
+        let body = json!({
+            "endpoint":"/api/logs/export",
+            "method":"GET",
+            "start":"2026-01-01T00:00:00Z",
+            "end":"2026-01-02T00:00:00Z",
+            "row_limit":10000,
+            "fields":["timestamp","message"],
+            "redaction_policy":"pii-basic",
+            "purpose":"incident review",
+            "query":{"service":"checkout"}
+        });
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/exports")
+                    .header("content-type", "application/json")
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .header("x-export-user", "ada@example.com")
+                    .header("x-forwarded-for", "198.51.100.7, 10.0.0.4")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key("x-export-receipt-id"));
+        let query = String::from_utf8(
+            to_bytes(response.into_body(), 64_000)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let parts: Vec<&str> = query.split('&').collect();
+        assert!(parts.contains(&"fields=timestamp"));
+        assert!(parts.contains(&"fields=message"));
+        assert!(parts.contains(&"limit=10000"));
+        assert!(parts.contains(&"service=checkout"));
+    }
+
+    #[tokio::test]
+    async fn api_rate_limit_uses_forwarded_ip_and_sets_retry_after() {
+        let router = app().await;
+        for _ in 0..40 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/v1/policy")
+                        .header("x-forwarded-for", "203.0.113.10, 10.0.0.2")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let limited = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/policy")
+                    .header("x-forwarded-for", "203.0.113.10, 192.0.2.99")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(limited.headers()[header::RETRY_AFTER], "1");
+
+        let other_client = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/policy")
+                    .header("x-forwarded-for", "203.0.113.11")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(other_client.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn export_rate_limit_cannot_be_bypassed_with_requester_names() {
+        let router = app().await;
+        let body = json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T02:00:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"audit review"});
+        for index in 0..20 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/exports")
+                        .header("content-type", "application/json")
+                        .header("x-ter-admin-token", "test-admin-token")
+                        .header("x-export-user", format!("user-{index}@example.com"))
+                        .header("x-forwarded-for", "192.0.2.8")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        let limited = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/exports")
+                    .header("content-type", "application/json")
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .header("x-export-user", "another-name@example.com")
+                    .header("x-forwarded-for", "192.0.2.8")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(limited.headers()[header::RETRY_AFTER], "1");
+    }
+
+    #[tokio::test]
+    async fn shared_sqlite_boundary_keeps_receipts_visible_across_instances() {
+        let path = std::env::temp_dir().join(format!("ter-{}.db", Uuid::new_v4()));
+        let mut config = Config::test();
+        config.database_url = format!("sqlite://{}?mode=rwc", path.display());
+        let first = build(config.clone()).await.unwrap();
+        let second = build(config).await.unwrap();
+        let body = json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T02:00:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"audit review"});
+        let response = first
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/exports")
+                    .header("content-type", "application/json")
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .header("x-export-user", "sam@example.com")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap();
+        let id = value["receipt_id"].as_str().unwrap();
+
+        let response = second
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/receipts/{id}/verify"))
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap();
+        assert_eq!(value["valid"], true);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn malformed_json_from_an_identified_requester_gets_a_signed_receipt() {
         let router = app().await;
         let malformed_body = "{ definitely not JSON; private-token";
@@ -757,6 +1102,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/exports")
+                    .header("x-ter-admin-token", "test-admin-token")
                     .header("content-type", "application/json")
                     .header("x-export-user", "malformed@example.com")
                     .body(Body::from(malformed_body))
@@ -774,6 +1120,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/v1/receipts/{id}"))
+                    .header("x-ter-admin-token", "test-admin-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -823,6 +1170,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/exports")
+                    .header("x-ter-admin-token", "test-admin-token")
                     .header("content-type", "application/json")
                     .header("x-export-user", "partial@example.com")
                     .body(Body::from(body.to_string()))
@@ -845,6 +1193,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/v1/receipts/{id}"))
+                    .header("x-ter-admin-token", "test-admin-token")
                     .body(Body::empty())
                     .unwrap(),
             )

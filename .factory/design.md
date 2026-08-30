@@ -48,4 +48,6 @@ One generated hero illustration shows a small night-market inspection window whe
 
 Generation command/model: `/opt/fleet/lib/gen-image.sh`, Azure OpenAI image deployment `factory-image`, 2026-08-28. Generated work is original for this product. The final optimized WebP and its source/prompt sidecar live under `frontend/public/assets/`; generated imagery is disclosed in the footer.
 
+The 1200×630 social card and 180×180 touch icon are crops derived from that same original image on 2026-08-30. No new third-party material was introduced.
+
 Authored SVG icons (gate, seal, copy, download, denial) use simple geometric strokes and are product-owned. No third-party visual assets are used.

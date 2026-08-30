@@ -4,7 +4,10 @@ import { createArchive } from './archive'
 const SLUG = 'telemetry-export-receipts'
 const LICENSE_KEY = `sb_license:${SLUG}`
 const VERDICT_KEY = `${LICENSE_KEY}:verdict`
+const ADMIN_KEY = 'ter:admin-token'
 const API = 'https://api.sociobot.in/api/v1'
+const isDemo = location.pathname === '/demo' || new URLSearchParams(location.search).get('demo') === '1'
+const buildId = (import.meta.env.VITE_BUILD_SHA || 'development').slice(0, 12)
 
 type Policy = {
   configured: boolean
@@ -36,6 +39,35 @@ type Receipt = {
   signature: string
 }
 
+const sampleReceipts: Receipt[] = [
+  {
+    schema: 'telemetry-export-receipt.v1', id: '0198f8b2-7f51-7000-a800-demo00000001', created_at: '2026-08-28T09:42:00Z',
+    requester: 'ada@northstar.example', purpose: 'INC-204 checkout latency review', endpoint: '/api/traces/export', method: 'POST',
+    time_range: { start: '2026-08-28T08:42:00Z', end: '2026-08-28T09:42:00Z' }, row_limit: 5000,
+    fields: ['timestamp', 'service', 'duration_ms', 'trace_id'], redaction_policy: 'pii-basic', query_sha256: '8a31f9305a386c587479887394a488a0a8047534982e03b8a7b0317c12929573',
+    policy: { max_range_seconds: 86400, max_rows: 10000, authorization_forwarded: true, result_body_recorded: false }, outcome: 'allowed', upstream_status: 200, denial_reason: null,
+    signature: '4fc874eec5effabf714a916735901b842e589a59acadaeef4bff4d00c8f6f11d',
+  },
+  {
+    schema: 'telemetry-export-receipt.v1', id: '0198f8a9-1c20-7000-a800-demo00000002', created_at: '2026-08-28T09:31:00Z',
+    requester: 'mina@northstar.example', purpose: 'Weekly error budget review', endpoint: '/api/logs/export', method: 'GET',
+    time_range: { start: '2026-08-26T09:31:00Z', end: '2026-08-28T09:31:00Z' }, row_limit: 10000,
+    fields: ['timestamp', 'service', 'message'], redaction_policy: 'strict', query_sha256: 'e11025ec4f93b62324d526b971668d5fae01be9b21ebb799d7ddfe831a27cf77',
+    policy: { max_range_seconds: 86400, max_rows: 10000, authorization_forwarded: true, result_body_recorded: false }, outcome: 'denied', upstream_status: null, denial_reason: 'Time range exceeds the 24 hour policy cap.',
+    signature: 'f1727f24da2913f59324ee71bee3f26ecf93f62b0d2022a84f55c06f7d0a912a',
+  },
+  {
+    schema: 'telemetry-export-receipt.v1', id: '0198f896-ae9f-7000-a800-demo00000003', created_at: '2026-08-28T09:12:00Z',
+    requester: 'jo@northstar.example', purpose: 'Customer timeout investigation', endpoint: '/api/metrics/export', method: 'POST',
+    time_range: { start: '2026-08-28T08:12:00Z', end: '2026-08-28T09:12:00Z' }, row_limit: 2000,
+    fields: ['timestamp', 'metric', 'value'], redaction_policy: 'pii-basic', query_sha256: '901bf11921f6f86cef887253486908298620a117d012cce062388f220a24f07d',
+    policy: { max_range_seconds: 86400, max_rows: 10000, authorization_forwarded: true, result_body_recorded: false }, outcome: 'upstream_error', upstream_status: 503, denial_reason: 'The upstream returned an error.',
+    signature: '08485ace727cb81dc7aa47e02dfb88472ba834ef54b01060bf9214b0988ef919',
+  },
+]
+
+let loadedReceipts: Receipt[] = []
+
 const icon = (name: 'seal' | 'gate' | 'copy' | 'download' | 'refresh') => {
   const paths = {
     seal: '<path d="M12 2l3 2 3.5.5.5 3.5 2 3-2 3-.5 3.5-3.5.5-3 2-3-2-3.5-.5-.5-3.5-2-3 2-3 .5-3.5 3.5-.5z"/><path d="m8.8 12 2.1 2.1 4.5-4.7"/>',
@@ -52,39 +84,55 @@ const path = location.pathname
 
 function shell(content: string, page: string) {
   app.innerHTML = `
+    ${isDemo ? '<aside class="demo-banner" aria-label="Demo mode"><strong>Demo — sample data, nothing is saved</strong><span><a href="/demo">Reset demo</a><a href="/">Start for real</a></span></aside>' : ''}
     <header class="site-header">
       <a class="brand" href="/" aria-label="TER. — Telemetry Export Receipts home"><span class="brand-mark">${icon('gate')}</span><span>TER<span class="brand-dot">.</span></span></a>
-      <nav aria-label="Primary"><a ${page === 'desk' ? 'aria-current="page"' : ''} href="/">Receipt desk</a><a href="/#integration">Integrate</a><a href="/#license">License</a></nav>
+      <nav aria-label="Primary"><a ${page === 'desk' && !isDemo ? 'aria-current="page"' : ''} href="/">Receipt desk</a><a ${isDemo ? 'aria-current="page"' : ''} href="/demo">Demo</a><a href="/#integration">Integrate</a><a href="/#license">License</a></nav>
       <span class="boundary"><i></i> Egress boundary</span>
     </header>
     ${content}
-    <footer><p><span class="footer-seal">${icon('seal')}</span> Built for operators who need proof, not another telemetry store.</p><nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/B-Divyesh/sf-telemetry-export-receipts">Source</a></nav><small>Hero imagery generated for this product with Azure OpenAI. No analytics or tracking.</small></footer>
+    <footer><p><span class="footer-seal">${icon('seal')}</span> Built for operators who need proof, not another telemetry store.</p><nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/B-Divyesh/sf-telemetry-export-receipts">Source</a></nav><small>Built by Param Factory · Build ${buildId} · Original generated hero art · No analytics</small></footer>
     <div id="announcer" class="sr-only" aria-live="polite"></div>`
 }
 
 function legalPage(kind: 'privacy' | 'terms') {
   const privacy = `
     <main id="main" class="legal"><p class="eyebrow">Legal / plain language</p><h1>Privacy</h1><p class="lede">Telemetry Export Receipts is designed to know about the export, not the exported data.</p>
-    <h2>What this installation stores</h2><p>For every permitted, denied, or failed export attempt, the server stores requester identity, purpose, endpoint, bounded time range, row cap, selected field names, redaction policy, a query hash, outcome, and signed policy snapshot. It does not store upstream authorization credentials or result bodies.</p>
+    <h2>What this installation stores</h2><p>For each export attempt, the server stores its requester, purpose, endpoint, bounds, policy, outcome, and signature. It stores selected field names and a query hash. It never stores upstream authorization credentials or result bodies.</p>
     <h2>Where it lives</h2><p>Receipts stay in the SQLite database controlled by the self-hosting operator. This web interface includes no analytics, advertising, tracking pixels, or third-party runtime scripts.</p>
-    <h2>Licenses</h2><p>If you buy or restore a license, its token and a time-limited verification result are stored in this browser. Verification is sent to Sociobot, the merchant of record. Do not paste an observability access token into the license field.</p>
-    <h2>Your controls</h2><p>Operators control retention by managing the local database. Clear this browser's site data to remove a locally stored license. Contact the operator of your installation for access or deletion requests.</p><p><em>Effective 28 August 2026.</em></p></main>`
+    <h2>Licenses</h2><p>This browser stores a purchased license token and its time-limited verification result. Verification goes to Sociobot, the merchant of record. Never paste an observability access token into the license field.</p>
+    <h2>Your controls</h2><p>Administrator access tokens stay in sessionStorage and disappear when the tab closes. Operators control retention by managing the local database. Clear this browser's site data to remove a locally stored license. Contact the operator of your installation for access or deletion requests.</p><p><em>Effective 28 August 2026.</em></p></main>`
   const terms = `
     <main id="main" class="legal"><p class="eyebrow">Legal / plain language</p><h1>Terms</h1><p class="lede">Use this software as one accountable layer in your export path—not as a replacement for upstream permissions.</p>
-    <h2>Service</h2><p>The software enforces configured time, row, path, and redaction bounds and creates signed records. You remain responsible for authenticating users, trusting the configured identity header only from your auth proxy, securing the signing key, and validating each upstream API integration.</p>
-    <h2>One-time license</h2><p>The optional Fleet archive unlock costs US$49 once and adds bulk local receipt packaging in the operator UI. The core proxy, safety policy, receipt signing, individual JSON/Markdown access, and accessibility remain available without purchase. Sociobot/Dodo is the merchant of record; refunds are handled there and revoke the license.</p>
+    <h2>Service</h2><p>The software enforces configured time, row, path, and redaction bounds and creates signed records. You must authenticate users and accept identity headers only from your auth proxy. You must also secure the signing key and test each upstream API integration.</p>
+    <h2>One-time license</h2><p>Fleet archive costs US$49 once and adds bulk receipt packaging in the operator UI. The core proxy, safety policy, receipt signing, individual downloads, and accessibility remain free. Sociobot/Dodo is the merchant of record. A refund revokes the license.</p>
     <h2>Warranty</h2><p>The open-source software is provided under the MIT License, without warranty. Review and test configuration before using it for a compliance program.</p><p><em>Effective 28 August 2026.</em></p></main>`
   document.title = `${kind === 'privacy' ? 'Privacy' : 'Terms'} — Telemetry Export Receipts`
+  setCanonical(`/${kind}`)
   shell(kind === 'privacy' ? privacy : terms, 'legal')
+}
+
+function setCanonical(route: string) {
+  document.querySelector<HTMLLinkElement>('#canonical')?.setAttribute('href', `https://telemetry-export-receipts.sociobot.in${route}`)
+}
+
+function notFoundPage() {
+  document.title = 'Page not found — Telemetry Export Receipts'
+  setCanonical('/404')
+  shell('<main id="main" class="legal"><p class="eyebrow">404 / Not found</p><h1>Page not found</h1><p class="lede">This address does not match a receipt-desk page.</p><a class="button primary" href="/">Return to receipt desk</a></main>', 'missing')
 }
 
 if (path === '/privacy' || path === '/terms') {
   legalPage(path.slice(1) as 'privacy' | 'terms')
-} else {
+} else if (path === '/' || isDemo) {
+  if (isDemo) {
+    document.title = 'Demo — Telemetry Export Receipts'
+    setCanonical('/demo')
+  }
   shell(`
   <main id="main">
     <section class="hero" aria-labelledby="hero-title">
-      <div class="hero-copy"><p class="eyebrow"><span>01</span> Signed at the boundary</p><h1 id="hero-title">Every export<br><em>leaves proof.</em></h1><p class="lede">Put a hard limit in front of telemetry downloads. Preserve upstream permissions. Issue a signed receipt that says who exported what—and under which policy.</p><div class="hero-actions"><a class="button primary" href="#desk">Inspect receipts <span>↓</span></a><a class="button quiet" href="#integration">Proxy an export <span>↗</span></a></div><ul class="proof-points"><li>${icon('seal')} Signed JSON + Markdown</li><li>${icon('gate')} Result bodies never stored</li></ul></div>
+      <div class="hero-copy"><p class="eyebrow"><span>01</span> Signed at the boundary</p><h1 id="hero-title">Record every<br><em>telemetry export.</em></h1><p class="lede">For observability teams, this proxy limits downloads and records who requested each one.</p><div class="hero-actions"><a class="button primary" href="/demo">Try it with sample data</a><a class="button quiet" href="#desk">Use your installation <span>↓</span></a></div><ul class="proof-points"><li>${icon('seal')} Signed JSON and Markdown</li><li>${icon('gate')} Result bodies never stored</li><li>${icon('download')} Optional archive costs $49 once</li></ul></div>
       <figure class="hero-art"><picture><source media="(max-width: 600px)" srcset="/assets/receipt-gate-mobile.webp"><source srcset="/assets/receipt-gate.webp" type="image/webp"><img src="/assets/receipt-gate.jpg" width="960" height="640" fetchpriority="high" decoding="async" alt="An illustrated night-market gate turns abstract telemetry streams into a sealed paper receipt."></picture><figcaption><span>Policy gate</span><span>Bounded egress → signed proof</span></figcaption></figure>
     </section>
     <section id="desk" class="desk" aria-labelledby="desk-title">
@@ -98,8 +146,9 @@ if (path === '/privacy' || path === '/terms') {
         </div>
       </div>
     </section>
-    <section id="integration" class="integration" aria-labelledby="integration-title"><div><p class="eyebrow"><span>03</span> One guarded route</p><h2 id="integration-title">Keep permissions.<br>Bound the query.</h2><p>The proxy forwards your existing <code>Authorization</code> and <code>Cookie</code> headers only to the configured upstream. Your trusted auth proxy supplies requester identity. The response comes back unchanged with receipt ID and signature headers.</p></div><div class="code-panel"><div class="code-head"><span><i></i><i></i><i></i></span><button id="copy-curl" type="button">${icon('copy')} Copy request</button></div><pre><code id="curl-example">curl -X POST https://your-host/api/v1/exports \\
+    <section id="integration" class="integration" aria-labelledby="integration-title"><div><p class="eyebrow"><span>03</span> One guarded route</p><h2 id="integration-title">Keep permissions.<br>Bound the query.</h2><p>The proxy forwards your existing <code>Authorization</code> and <code>Cookie</code> headers only to the configured upstream. Your trusted auth proxy supplies requester identity. The upstream body and status return with receipt ID and signature headers.</p></div><div class="code-panel"><div class="code-head"><span><i></i><i></i><i></i></span><button id="copy-curl" type="button">${icon('copy')} Copy request</button></div><pre><code id="curl-example">curl -X POST https://your-host/api/v1/exports \\
   -H 'Authorization: Bearer …' \\
+  -H 'X-TER-Admin-Token: …' \\
   -H 'X-Export-User: ada@example.com' \\
   -H 'Content-Type: application/json' \\
   -d '{
@@ -111,12 +160,12 @@ if (path === '/privacy' || path === '/terms') {
     "redaction_policy": "pii-basic",
     "purpose": "INC-204 response"
   }'</code></pre><p class="code-note"><span>Response headers</span> X-Export-Receipt-Id · X-Export-Receipt-Signature</p></div></section>
-    <section id="license" class="license-section" aria-labelledby="license-title"><div class="license-copy"><p class="eyebrow"><span>04</span> Optional operator unlock</p><h2 id="license-title">Take the audit with you.</h2><p>The core proxy and individual signed receipts stay free. Fleet archive packages the loaded audit set for an offline review or handoff.</p><ul><li>Bulk JSON archive from current filters</li><li>Portable, no recurring data-volume fee</li><li>One installation license</li></ul></div><div class="license-ticket"><p class="ticket-kicker">Fleet archive</p><p class="price"><strong>$49</strong> <span>once</span></p><p id="license-status">License not installed</p><a id="buy-license" class="button primary" href="https://api.sociobot.in/api/v1/products/telemetry-export-receipts/checkout">Buy one-time license <span>↗</span></a><button id="download-archive" class="button primary" type="button" aria-label="Download JSON archive" hidden>${icon('download')} Download JSON archive</button><details><summary>Have a license? Restore it</summary><form id="license-form"><label for="license-token">License token</label><input id="license-token" name="license" autocomplete="off" spellcheck="false"><button type="submit" class="button quiet" aria-label="Verify license">Verify license</button></form></details><p class="legal-note">Sociobot/Dodo is merchant of record. Refunds are handled there. <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p></div></section>
+    <section id="license" class="license-section" aria-labelledby="license-title"><div class="license-copy"><p class="eyebrow"><span>04</span> Optional paid archive</p><h2 id="license-title">Export a receipt archive.</h2><p>The core proxy and individual signed receipts stay free. Fleet archive packages the loaded audit set for an offline review or handoff.</p><ul><li>Bulk JSON archive from current filters</li><li>Portable, no recurring data-volume fee</li><li>One installation license</li></ul></div><div class="license-ticket"><p class="ticket-kicker">Fleet archive</p><p class="price"><strong>$49</strong> <span>once</span></p><p id="license-status">License not installed</p><a id="buy-license" class="button primary" href="https://api.sociobot.in/api/v1/products/telemetry-export-receipts/checkout">Buy one-time license <span>↗</span></a><button id="download-archive" class="button primary" type="button" aria-label="Download JSON archive" hidden>${icon('download')} Download JSON archive</button><details><summary>Have a license? Restore it</summary><form id="license-form"><label for="license-token">License token</label><input id="license-token" name="license" autocomplete="off" spellcheck="false"><button type="submit" class="button quiet" aria-label="Verify license">Verify license</button></form></details><p class="legal-note">Sociobot/Dodo is merchant of record. Refunds are handled there. <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p></div></section>
   </main>`, 'desk')
   void initDesk()
+} else {
+  notFoundPage()
 }
-
-let loadedReceipts: Receipt[] = []
 
 async function initDesk() {
   captureReturnedLicense()
@@ -124,7 +173,15 @@ async function initDesk() {
   updateNetworkState()
   addEventListener('online', updateNetworkState)
   addEventListener('offline', updateNetworkState)
-  await Promise.all([loadPolicy(), loadReceipts(), checkLicense()])
+  if (isDemo) {
+    renderDemoPolicy()
+    loadReceipts()
+    setLicense(false, 'License not used in demo')
+    document.querySelector<HTMLAnchorElement>('#buy-license')!.hidden = true
+    document.querySelector<HTMLDetailsElement>('.license-ticket details')!.hidden = true
+  } else {
+    await Promise.all([loadPolicy(), loadReceipts(), checkLicense()])
+  }
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => undefined)
 }
 
@@ -141,6 +198,16 @@ function bindInteractions() {
     if (token) { localStorage.setItem(LICENSE_KEY, token); localStorage.removeItem(VERDICT_KEY); void checkLicense(true) }
   })
   document.querySelector('#download-archive')!.addEventListener('click', downloadArchive)
+}
+
+function renderDemoPolicy() {
+  const target = document.querySelector<HTMLDivElement>('#policy-state')!
+  target.className = ''
+  target.innerHTML = ''
+  const state = document.createElement('p')
+  state.className = 'policy-ready'
+  state.textContent = '● Sample policy active'
+  target.append(state, policyRows({ configured: true, allowed_paths: ['/api/logs/export', '/api/traces/export', '/api/metrics/export'], max_range_hours: 24, max_rows: 10000, redaction_policies: ['pii-basic', 'strict'], identity_header: 'x-export-user', signing: 'HMAC-SHA256' }))
 }
 
 async function loadPolicy() {
@@ -183,8 +250,17 @@ async function loadReceipts() {
   const params = new URLSearchParams({ limit: '50' })
   if (requester) params.set('requester', requester)
   if (outcome) params.set('outcome', outcome)
+  if (isDemo) {
+    const matches = sampleReceipts.filter(receipt => (!requester || receipt.requester.toLowerCase().includes(requester.toLowerCase())) && (!outcome || receipt.outcome === outcome))
+    loadedReceipts = matches
+    renderReceipts(matches)
+    list.setAttribute('aria-busy', 'false')
+    return
+  }
+  if (!sessionStorage.getItem(ADMIN_KEY)) return renderAdminAccess(list)
   try {
-    const response = await fetch(`/api/v1/receipts?${params}`, { headers: { Accept: 'application/json' }, cache: 'no-store' })
+    const response = await fetch(`/api/v1/receipts?${params}`, { headers: adminHeaders(), cache: 'no-store' })
+    if (response.status === 401) return renderAdminAccess(list, true)
     if (!response.ok) throw new Error()
     const data = await response.json() as { receipts: Receipt[] }
     loadedReceipts = data.receipts
@@ -193,6 +269,27 @@ async function loadReceipts() {
     list.innerHTML = '<div class="empty-seal" aria-hidden="true">!</div><h3>The ledger could not be reached</h3><p>Check the server connection, then use Refresh. Existing exports remain in SQLite.</p><button class="button quiet retry" type="button">Try again</button>'
     list.querySelector('button')?.addEventListener('click', () => void loadReceipts())
   } finally { list.setAttribute('aria-busy', 'false') }
+}
+
+function adminHeaders() {
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  const token = sessionStorage.getItem(ADMIN_KEY)
+  if (token) headers['X-TER-Admin-Token'] = token
+  return headers
+}
+
+function renderAdminAccess(list: HTMLDivElement, rejected = false) {
+  loadedReceipts = []
+  list.classList.add('empty')
+  list.innerHTML = `<div class="empty-seal" aria-hidden="true">⌁</div><h3>Administrator access required</h3><p id="admin-help">Enter the token from the server’s admin-access.key file. It stays in this browser tab.</p>${rejected ? '<p id="admin-error" class="form-error" role="alert">That token was not accepted. Check the file and try again.</p>' : ''}<form id="admin-access" class="admin-access"><label for="admin-token">Administrator token</label><input id="admin-token" name="token" type="password" autocomplete="off" aria-describedby="admin-help${rejected ? ' admin-error' : ''}" required><button class="button primary" type="submit">Open receipt desk</button></form>`
+  list.querySelector<HTMLFormElement>('#admin-access')?.addEventListener('submit', event => {
+    event.preventDefault()
+    const token = new FormData(event.currentTarget as HTMLFormElement).get('token')?.toString().trim()
+    if (!token) return
+    sessionStorage.setItem(ADMIN_KEY, token)
+    announce('Administrator token saved for this tab.')
+    void loadReceipts()
+  })
 }
 
 function renderReceipts(receipts: Receipt[]) {
@@ -228,13 +325,37 @@ function receiptRow(receipt: Receipt) {
   ]
   for (const [term, value] of values) { const wrap = document.createElement('div'); const dt = document.createElement('dt'); dt.textContent = term!; const dd = document.createElement('dd'); dd.textContent = value!; if (term === 'Receipt ID' || term === 'Query SHA-256' || term === 'Signature') dd.className = 'mono'; wrap.append(dt, dd); grid.append(wrap) }
   const actions = document.createElement('div'); actions.className = 'receipt-actions'
-  const jsonLink = document.createElement('a'); jsonLink.className = 'button mini'; jsonLink.href = `/api/v1/receipts/${encodeURIComponent(receipt.id)}`; jsonLink.textContent = 'Open JSON'
-  const mdLink = document.createElement('a'); mdLink.className = 'button mini'; mdLink.href = `/api/v1/receipts/${encodeURIComponent(receipt.id)}/markdown`; mdLink.textContent = 'Download Markdown'
-  const verifyLink = document.createElement('a'); verifyLink.className = 'button mini'; verifyLink.href = `/api/v1/receipts/${encodeURIComponent(receipt.id)}/verify`; verifyLink.textContent = 'Verify signature'
-  actions.append(jsonLink, mdLink, verifyLink); details.append(grid, actions)
+  if (!isDemo) {
+    const jsonButton = document.createElement('button'); jsonButton.type = 'button'; jsonButton.className = 'button mini'; jsonButton.textContent = 'Download JSON'; jsonButton.addEventListener('click', () => void downloadProtectedReceipt(`/api/v1/receipts/${encodeURIComponent(receipt.id)}`, `${receipt.id}.json`))
+    const mdButton = document.createElement('button'); mdButton.type = 'button'; mdButton.className = 'button mini'; mdButton.textContent = 'Download Markdown'; mdButton.addEventListener('click', () => void downloadProtectedReceipt(`/api/v1/receipts/${encodeURIComponent(receipt.id)}/markdown`, `${receipt.id}.md`))
+    const verifyButton = document.createElement('button'); verifyButton.type = 'button'; verifyButton.className = 'button mini'; verifyButton.textContent = 'Verify signature'; verifyButton.addEventListener('click', () => void verifyProtectedReceipt(receipt.id))
+    actions.append(jsonButton, mdButton, verifyButton)
+  } else {
+    const note = document.createElement('p'); note.className = 'demo-note'; note.textContent = 'Sample receipt — no server record was created.'; actions.append(note)
+  }
+  details.append(grid, actions)
   button.addEventListener('click', () => { const open = button.getAttribute('aria-expanded') === 'true'; button.setAttribute('aria-expanded', String(!open)); details.hidden = open })
   article.append(heading, details)
   return article
+}
+
+async function downloadProtectedReceipt(url: string, filename: string) {
+  try {
+    const response = await fetch(url, { headers: adminHeaders(), cache: 'no-store' })
+    if (!response.ok) throw new Error()
+    const blob = await response.blob()
+    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click(); URL.revokeObjectURL(link.href)
+    announce(`Downloaded ${filename}.`)
+  } catch { announce('The receipt could not be downloaded. Check administrator access, then try again.') }
+}
+
+async function verifyProtectedReceipt(id: string) {
+  try {
+    const response = await fetch(`/api/v1/receipts/${encodeURIComponent(id)}/verify`, { headers: adminHeaders(), cache: 'no-store' })
+    if (!response.ok) throw new Error()
+    const result = await response.json() as { valid: boolean }
+    announce(result.valid ? 'The receipt signature is valid.' : 'The receipt signature is not valid.')
+  } catch { announce('The signature could not be checked. Check administrator access, then try again.') }
 }
 
 function captureReturnedLicense() {

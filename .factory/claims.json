@@ -1,0 +1,37 @@
+[
+  {
+    "id": "demo-sandbox",
+    "claim": "The sample-data demo does not save data or contact third parties.",
+    "where": "landing primary action and demo banner",
+    "test": "npx playwright test -g '@claim:demo-sandbox'",
+    "sandbox": "fresh browser context at /demo; assert realistic receipts, empty browser storage, and same-origin requests only"
+  },
+  {
+    "id": "offline-reload",
+    "claim": "The sample-data demo works offline after the first visit.",
+    "where": ".factory/demo.md",
+    "test": "npx playwright test -g '@claim:offline-reload'",
+    "sandbox": "fresh browser context; wait for service worker control, go offline, reload /demo, and assert sample receipt content"
+  },
+  {
+    "id": "denied-receipt",
+    "claim": "An identified policy denial creates a signed receipt without storing raw query values.",
+    "where": "README and product privacy copy",
+    "test": "npx playwright test -g '@claim:denied-receipt'",
+    "sandbox": "test administrator token; send an over-range request with a marker, retrieve its receipt, assert marker absent, and verify its signature"
+  },
+  {
+    "id": "archive-json",
+    "claim": "Fleet archive packages the loaded receipt set as JSON.",
+    "where": "paid tier and README",
+    "test": "npx vitest run -t '@claim:archive-json'",
+    "sandbox": "fixed receipt fixture and timestamp; assert schema, count, signatures, and complete receipt list"
+  },
+  {
+    "id": "port-only-startup",
+    "claim": "The server starts with only PORT and persists generated secrets outside the binary.",
+    "where": "README configuration and local-run sections",
+    "test": "cargo test --test startup port_only_startup_generates_and_reports_configuration_sources",
+    "sandbox": "empty temporary working directory and cleared environment except a reserved PORT; assert health, provenance logs, and mode-0600 generated secret files"
+  }
+]
