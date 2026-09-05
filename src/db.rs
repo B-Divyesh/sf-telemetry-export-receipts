@@ -1,6 +1,6 @@
 use crate::receipt::{Receipt, StoredReceipt};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     Row, SqlitePool,
 };
 use std::{str::FromStr, time::Duration};
@@ -17,7 +17,12 @@ pub async fn connect(url: &str) -> Result<SqlitePool, sqlx::Error> {
     // This service has one writer by design. A single pooled connection avoids
     // self-contention on SQLite, including Azure Files where lock handoff can
     // be slower during a revision transition.
-    let options = SqliteConnectOptions::from_str(url)?.busy_timeout(Duration::from_secs(30));
+    // Azure Files is an SMB-backed durable mount. Rollback journals keep its
+    // locking model simple; SQLite WAL needs shared-memory sidecars and can
+    // leave a new revision waiting indefinitely for an exclusive lock.
+    let options = SqliteConnectOptions::from_str(url)?
+        .busy_timeout(Duration::from_secs(30))
+        .journal_mode(SqliteJournalMode::Delete);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(options)
