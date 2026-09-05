@@ -13,7 +13,7 @@ It does **not** store telemetry, replace your observability product's permission
 5. It injects accepted bounds into the upstream GET query or POST JSON body and forwards only to `TER_UPSTREAM_BASE_URL`.
 6. It returns the upstream response with receipt ID and signature headers. SQLite stores only receipt metadata and a query digest.
 
-Denied and failed attempts also receive a stored receipt. If receipt persistence fails after an upstream response, the result is withheld rather than creating an unreceipted export.
+Denied, upstream-failed, and identified rate-limited attempts also receive a stored receipt. A rate-limited receipt records the requester and rejection without reading or storing the request envelope. If receipt persistence fails after an upstream response, the result is withheld rather than creating an unreceipted export.
 
 ## Configure
 

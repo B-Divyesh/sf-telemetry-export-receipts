@@ -6,8 +6,8 @@ const LICENSE_KEY = `sb_license:${SLUG}`
 const VERDICT_KEY = `${LICENSE_KEY}:verdict`
 const ADMIN_KEY = 'ter:admin-token'
 const API = 'https://api.sociobot.in/api/v1'
-const isDemo = location.pathname === '/demo' || new URLSearchParams(location.search).get('demo') === '1'
 const buildId = (import.meta.env.VITE_BUILD_SHA || 'development').slice(0, 12)
+let isDemo = false
 
 type Policy = {
   configured: boolean
@@ -80,7 +80,6 @@ const icon = (name: 'seal' | 'gate' | 'copy' | 'download' | 'refresh') => {
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
-const path = location.pathname
 
 function shell(content: string, page: string) {
   app.innerHTML = `
@@ -91,7 +90,7 @@ function shell(content: string, page: string) {
       <span class="boundary"><i></i> Egress boundary</span>
     </header>
     ${content}
-    <footer><p><span class="footer-seal">${icon('seal')}</span> Built for operators who need proof, not another telemetry store.</p><nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/B-Divyesh/sf-telemetry-export-receipts">Source</a></nav><small>Built by Param Factory · Build ${buildId} · Original generated hero art · No analytics</small></footer>
+    <footer><p><span class="footer-seal">${icon('seal')}</span> Records export metadata without storing telemetry.</p><nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/B-Divyesh/sf-telemetry-export-receipts">Source</a></nav><small>Built by Param Factory · Build ${buildId} · Original generated hero art · No analytics</small></footer>
     <div id="announcer" class="sr-only" aria-live="polite"></div>`
 }
 
@@ -122,9 +121,14 @@ function notFoundPage() {
   shell('<main id="main" class="legal"><p class="eyebrow">404 / Not found</p><h1>Page not found</h1><p class="lede">This address does not match a receipt-desk page.</p><a class="button primary" href="/">Return to receipt desk</a></main>', 'missing')
 }
 
-if (path === '/privacy' || path === '/terms') {
-  legalPage(path.slice(1) as 'privacy' | 'terms')
-} else if (path === '/' || isDemo) {
+function renderRoute(routeChanged = false) {
+  const path = location.pathname
+  isDemo = path === '/demo' || new URLSearchParams(location.search).get('demo') === '1'
+  if (path === '/privacy' || path === '/terms') {
+    legalPage(path.slice(1) as 'privacy' | 'terms')
+  } else if (path === '/' || isDemo) {
+    document.title = 'Telemetry Export Receipts — signed export records'
+    setCanonical('/')
   if (isDemo) {
     document.title = 'Demo — Telemetry Export Receipts'
     setCanonical('/demo')
@@ -163,9 +167,40 @@ if (path === '/privacy' || path === '/terms') {
     <section id="license" class="license-section" aria-labelledby="license-title"><div class="license-copy"><p class="eyebrow"><span>04</span> Optional paid archive</p><h2 id="license-title">Export a receipt archive.</h2><p>The core proxy and individual signed receipts stay free. Fleet archive packages the loaded audit set for an offline review or handoff.</p><ul><li>Bulk JSON archive from current filters</li><li>Portable, no recurring data-volume fee</li><li>One installation license</li></ul></div><div class="license-ticket"><p class="ticket-kicker">Fleet archive</p><p class="price"><strong>$49</strong> <span>once</span></p><p id="license-status">License not installed</p><a id="buy-license" class="button primary" href="https://api.sociobot.in/api/v1/products/telemetry-export-receipts/checkout">Buy one-time license <span>↗</span></a><button id="download-archive" class="button primary" type="button" aria-label="Download JSON archive" hidden>${icon('download')} Download JSON archive</button><details><summary>Have a license? Restore it</summary><form id="license-form"><label for="license-token">License token</label><input id="license-token" name="license" autocomplete="off" spellcheck="false"><button type="submit" class="button quiet" aria-label="Verify license">Verify license</button></form></details><p class="legal-note">Sociobot/Dodo is merchant of record. Refunds are handled there. <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p></div></section>
   </main>`, 'desk')
   void initDesk()
-} else {
-  notFoundPage()
+  } else {
+    notFoundPage()
+  }
+  if (routeChanged) focusAndAnnounceRoute()
 }
+
+function focusAndAnnounceRoute() {
+  const heading = document.querySelector<HTMLElement>('main h1')
+  if (!heading) return
+  heading.tabIndex = -1
+  requestAnimationFrame(() => {
+    if (location.hash) document.querySelector(location.hash)?.scrollIntoView()
+    heading.focus({ preventScroll: true })
+    const label = [...heading.childNodes].map(node => node.textContent || '').join(' ').replace(/\s+/g, ' ').trim()
+    announce(`${label} loaded.`)
+  })
+}
+
+function interceptRouteNavigation(event: MouseEvent) {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  const link = (event.target as Element | null)?.closest<HTMLAnchorElement>('a[href]')
+  if (!link || link.target || link.hasAttribute('download')) return
+  const destination = new URL(link.href, location.href)
+  if (destination.origin !== location.origin) return
+  if (destination.pathname === location.pathname && destination.search === location.search) return
+  event.preventDefault()
+  history.pushState({}, '', `${destination.pathname}${destination.search}${destination.hash}`)
+  window.scrollTo(0, 0)
+  renderRoute(true)
+}
+
+addEventListener('click', interceptRouteNavigation)
+addEventListener('popstate', () => renderRoute(true))
+renderRoute()
 
 async function initDesk() {
   captureReturnedLicense()

@@ -33,5 +33,61 @@
     "where": "README configuration and local-run sections",
     "test": "cargo test --test startup port_only_startup_generates_and_reports_configuration_sources",
     "sandbox": "empty temporary working directory and cleared environment except a reserved PORT; assert health, provenance logs, and mode-0600 generated secret files"
+  },
+  {
+    "id": "recorded-exports",
+    "claim": "Allowed, denied, and upstream-failed exports each create a signed receipt.",
+    "where": "README and landing receipt desk",
+    "test": "cargo test --lib app::tests::claim_allowed_denied_and_upstream_failed_exports_have_signed_receipts -- --exact",
+    "sandbox": "isolated upstream returns success and 503; a bounded request, a policy denial, and an upstream failure each produce a retrievable valid receipt"
+  },
+  {
+    "id": "signed-downloads",
+    "claim": "Receipts download as signed JSON and Markdown.",
+    "where": "landing proof point, receipt actions, README",
+    "test": "cargo test --lib app::tests::claim_receipts_are_signed_and_downloadable_as_json_and_markdown -- --exact",
+    "sandbox": "identified policy denial; retrieve JSON and Markdown and verify both carry the receipt signature"
+  },
+  {
+    "id": "privacy-forwarding",
+    "claim": "The proxy forwards only Authorization, Cookie, and Accept to the upstream and never stores result bodies or those credentials.",
+    "where": "integration section, privacy page, README",
+    "test": "cargo test --lib app::tests::claim_allowed_exports_forward_only_permitted_headers_and_store_no_result_data -- --exact",
+    "sandbox": "isolated upstream records received headers and returns a private marker; assert only permitted client headers arrive and the stored receipt omits all markers"
+  },
+  {
+    "id": "bounded-get-export",
+    "claim": "GET exports send declared bounds and repeated field names to the approved upstream.",
+    "where": "README configuration",
+    "test": "cargo test --lib app::tests::claim_get_export_repeats_array_fields_and_reaches_upstream -- --exact",
+    "sandbox": "exact-boundary GET against an isolated upstream; assert repeated fields, row cap, and query value arrive"
+  },
+  {
+    "id": "administrator-access",
+    "claim": "Receipt reads and exports require administrator access, and the browser keeps that token only for the current tab.",
+    "where": "receipt desk, privacy page, README",
+    "test": "npx playwright test -g '@claim:administrator-access'",
+    "sandbox": "fresh browser opens the protected desk with the test administrator token and asserts sessionStorage, not localStorage, holds it"
+  },
+  {
+    "id": "no-third-party-runtime",
+    "claim": "The product has no analytics, ads, external fonts, or runtime CDN scripts.",
+    "where": "privacy page, footer, README",
+    "test": "npx playwright test -g '@claim:no-third-party-runtime'",
+    "sandbox": "fresh browser records every first-load request and asserts that each is same-origin"
+  },
+  {
+    "id": "api-rate-limit",
+    "claim": "Every API except health is limited by client address, returns Retry-After on 429, and records identified rate-limited exports.",
+    "where": "README privacy and security notes",
+    "test": "cargo test --lib app::tests::claim_api_rate_limit_uses_client_address_and_receipts_for_exports -- --exact",
+    "sandbox": "fixed forwarded address exhausts each protected read route and the export route; assert 429/Retry-After and a valid export-denial receipt"
+  },
+  {
+    "id": "paid-license-unlock",
+    "claim": "A valid US$49 one-time Fleet archive license unlocks the archive after return or restore without caching its token URL.",
+    "where": "license section and terms",
+    "test": "npx playwright test -g '@claim:paid-license-unlock'",
+    "sandbox": "recorded valid Sociobot verification response; exercise return and restore, assert archive unlock and Cache Storage contains no license URL"
   }
 ]

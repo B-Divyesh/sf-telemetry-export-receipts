@@ -178,6 +178,18 @@ async fn proxy_export(State(state): State<AppState>, request: Request<Body>) -> 
             )
         }
     };
+    // The export limiter runs after administrator and requester checks. That
+    // lets a rejected, identified export receive the same audit treatment as
+    // every other export attempt without consuming its untrusted body.
+    if let Some(seconds) = take_rate_token(&state, "export", &headers, 20.0, 5.0).await {
+        return record_rate_limited_export(
+            &state,
+            requester,
+            headers.contains_key(header::AUTHORIZATION),
+            seconds,
+        )
+        .await;
+    }
     let mut request =
         match to_bytes(body, 256 * 1024).await {
             Ok(body) => match serde_json::from_slice::<ExportRequest>(&body) {
@@ -380,6 +392,21 @@ fn unparsed_export_request() -> ExportRequest {
     }
 }
 
+fn rate_limited_export_request() -> ExportRequest {
+    let now = Utc::now();
+    ExportRequest {
+        endpoint: "(rate-limited request)".into(),
+        method: "RATE_LIMITED".into(),
+        start: now,
+        end: now,
+        row_limit: 0,
+        fields: Vec::new(),
+        redaction_policy: "(rate-limited request)".into(),
+        purpose: "Rate-limited export request".into(),
+        query: BTreeMap::new(),
+    }
+}
+
 async fn record_failure(
     state: &AppState,
     request: &ExportRequest,
@@ -411,6 +438,34 @@ async fn record_failure(
             None,
         ),
     }
+}
+
+async fn record_rate_limited_export(
+    state: &AppState,
+    requester: String,
+    authorization_forwarded: bool,
+    retry_after: u64,
+) -> Response {
+    let mut response = record_failure(
+        state,
+        &rate_limited_export_request(),
+        requester,
+        ReceiptFailure {
+            outcome: "denied",
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "rate_limited",
+            message: "Too many export requests from this client. Retry after the stated delay.",
+            reason: "Export rate limit exceeded before the request envelope was read.",
+            upstream_status: None,
+        },
+        authorization_forwarded,
+    )
+    .await;
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        HeaderValue::from_str(&retry_after.to_string()).expect("valid retry delay"),
+    );
+    response
 }
 
 fn validate(config: &Config, request: &ExportRequest) -> Option<String> {
@@ -610,6 +665,31 @@ async fn require_admin(
     let accepted =
         supplied.len() == expected.len() && bool::from(supplied.as_bytes().ct_eq(expected));
     if !accepted {
+        // Auth failures are not attributable exports, but they still need a
+        // request allowance so this route cannot bypass the API-wide limiter.
+        if request.uri().path() == "/api/v1/exports" {
+            if let Some(seconds) = take_rate_token(
+                &state,
+                "unauthenticated-export",
+                request.headers(),
+                20.0,
+                5.0,
+            )
+            .await
+            {
+                let mut response = error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "rate_limited",
+                    "Too many requests from this client. Retry after the stated delay.",
+                    None,
+                );
+                response.headers_mut().insert(
+                    header::RETRY_AFTER,
+                    HeaderValue::from_str(&seconds.to_string()).expect("valid retry delay"),
+                );
+                return response;
+            }
+        }
         return error(
             StatusCode::UNAUTHORIZED,
             "admin_access_required",
@@ -625,31 +705,10 @@ async fn api_rate_limit(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let is_export = request.uri().path() == "/api/v1/exports";
-    let (capacity, refill_per_second, class) = if is_export {
-        (20.0, 5.0, "export")
-    } else {
-        (40.0, 20.0, "read")
-    };
-    let client = first_forwarded_for(request.headers());
-    let key = format!("{class}:{client}");
-    let retry_after = {
-        let mut rates = state.rate.lock().await;
-        let now = Instant::now();
-        let bucket = rates.entry(key).or_insert(RateBucket {
-            tokens: capacity,
-            updated: now,
-        });
-        let elapsed = now.duration_since(bucket.updated).as_secs_f64();
-        bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(capacity);
-        bucket.updated = now;
-        if bucket.tokens >= 1.0 {
-            bucket.tokens -= 1.0;
-            None
-        } else {
-            Some(((1.0 - bucket.tokens) / refill_per_second).ceil().max(1.0) as u64)
-        }
-    };
+    if request.uri().path() == "/api/v1/exports" {
+        return next.run(request).await;
+    }
+    let retry_after = take_rate_token(&state, "read", request.headers(), 40.0, 20.0).await;
     if let Some(seconds) = retry_after {
         let mut response = error(
             StatusCode::TOO_MANY_REQUESTS,
@@ -664,6 +723,32 @@ async fn api_rate_limit(
         return response;
     }
     next.run(request).await
+}
+
+async fn take_rate_token(
+    state: &AppState,
+    class: &str,
+    headers: &axum::http::HeaderMap,
+    capacity: f64,
+    refill_per_second: f64,
+) -> Option<u64> {
+    let client = first_forwarded_for(headers);
+    let key = format!("{class}:{client}");
+    let mut rates = state.rate.lock().await;
+    let now = Instant::now();
+    let bucket = rates.entry(key).or_insert(RateBucket {
+        tokens: capacity,
+        updated: now,
+    });
+    let elapsed = now.duration_since(bucket.updated).as_secs_f64();
+    bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(capacity);
+    bucket.updated = now;
+    if bucket.tokens >= 1.0 {
+        bucket.tokens -= 1.0;
+        None
+    } else {
+        Some(((1.0 - bucket.tokens) / refill_per_second).ceil().max(1.0) as u64)
+    }
 }
 
 fn first_forwarded_for(headers: &axum::http::HeaderMap) -> String {
@@ -739,7 +824,10 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::to_bytes, http::Request};
+    use axum::{
+        body::to_bytes,
+        http::{HeaderMap, Request},
+    };
     use tower::ServiceExt;
 
     async fn app() -> Router {
@@ -852,11 +940,100 @@ mod tests {
         assert_eq!(verify.status(), StatusCode::OK);
     }
 
+    // @claim:signed-downloads
     #[tokio::test]
-    async fn allowed_export_forwards_body_and_creates_receipt() {
+    async fn claim_receipts_are_signed_and_downloadable_as_json_and_markdown() {
+        let router = app().await;
+        let body = json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T02:00:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"audit review"});
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/exports")
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .header("x-export-user", "download@example.com")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap();
+        let receipt_id = response["receipt_id"].as_str().unwrap();
+        let json_download = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/receipts/{receipt_id}"))
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(json_download.status(), StatusCode::OK);
+        let json_download: Value =
+            serde_json::from_slice(&to_bytes(json_download.into_body(), 64_000).await.unwrap())
+                .unwrap();
+        let signature = json_download["signature"].as_str().expect("signature");
+        assert_eq!(json_download["id"], receipt_id);
+        let markdown_download = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/receipts/{receipt_id}/markdown"))
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(markdown_download.status(), StatusCode::OK);
+        assert_eq!(
+            markdown_download.headers()[header::CONTENT_TYPE],
+            "text/markdown; charset=utf-8"
+        );
+        let markdown = String::from_utf8(
+            to_bytes(markdown_download.into_body(), 64_000)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(markdown.contains(receipt_id));
+        assert!(markdown.contains(signature));
+        let verification = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/receipts/{receipt_id}/verify"))
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let verification: Value =
+            serde_json::from_slice(&to_bytes(verification.into_body(), 64_000).await.unwrap())
+                .unwrap();
+        assert_eq!(verification["valid"], true);
+    }
+
+    // @claim:privacy-forwarding
+    #[tokio::test]
+    async fn claim_allowed_exports_forward_only_permitted_headers_and_store_no_result_data() {
+        let captured = Arc::new(Mutex::new(None));
+        let upstream_headers = Arc::clone(&captured);
         let upstream = Router::new().route(
             "/api/logs/export",
-            post(|| async { (StatusCode::OK, "timestamp,message\n1,hello") }),
+            post(move |headers: HeaderMap| {
+                let upstream_headers = Arc::clone(&upstream_headers);
+                async move {
+                    *upstream_headers.lock().await = Some(headers);
+                    (StatusCode::OK, "timestamp,message\n1,private-upstream-row")
+                }
+            }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -875,7 +1052,10 @@ mod tests {
                     .header("x-ter-admin-token", "test-admin-token")
                     .header("content-type", "application/json")
                     .header("authorization", "Bearer upstream-token")
+                    .header("cookie", "session=upstream-cookie")
+                    .header("accept", "text/csv")
                     .header("x-export-user", "ada@example.com")
+                    .header("x-unapproved-client-header", "must-not-forward")
                     .body(Body::from(body.to_string()))
                     .unwrap(),
             )
@@ -887,7 +1067,17 @@ mod tests {
             .unwrap()
             .to_owned();
         let bytes = to_bytes(response.into_body(), 64_000).await.unwrap();
-        assert_eq!(&bytes[..], b"timestamp,message\n1,hello");
+        assert_eq!(&bytes[..], b"timestamp,message\n1,private-upstream-row");
+        let upstream_headers = captured.lock().await.take().expect("upstream request");
+        assert_eq!(
+            upstream_headers[header::AUTHORIZATION],
+            "Bearer upstream-token"
+        );
+        assert_eq!(upstream_headers[header::COOKIE], "session=upstream-cookie");
+        assert_eq!(upstream_headers[header::ACCEPT], "text/csv");
+        assert!(!upstream_headers.contains_key("x-export-user"));
+        assert!(!upstream_headers.contains_key("x-ter-admin-token"));
+        assert!(!upstream_headers.contains_key("x-unapproved-client-header"));
 
         let receipt_response = router
             .oneshot(
@@ -905,11 +1095,112 @@ mod tests {
         let receipt_json: Value = serde_json::from_slice(&receipt_bytes).unwrap();
         assert_eq!(receipt_json["outcome"], "allowed");
         assert_eq!(receipt_json["policy"]["result_body_recorded"], false);
-        assert!(!String::from_utf8_lossy(&receipt_bytes).contains("hello"));
+        let receipt_text = String::from_utf8_lossy(&receipt_bytes);
+        assert!(!receipt_text.contains("private-upstream-row"));
+        assert!(!receipt_text.contains("upstream-token"));
+        assert!(!receipt_text.contains("upstream-cookie"));
     }
 
+    // @claim:recorded-exports
     #[tokio::test]
-    async fn get_export_repeats_array_fields_and_reaches_upstream() {
+    async fn claim_allowed_denied_and_upstream_failed_exports_have_signed_receipts() {
+        let upstream = Router::new().route(
+            "/api/logs/export",
+            post(|Json(payload): Json<Value>| async move {
+                if payload["scenario"] == "failure" {
+                    (StatusCode::SERVICE_UNAVAILABLE, "upstream unavailable")
+                } else {
+                    (StatusCode::OK, "timestamp,message\n1,ok")
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+
+        let mut config = Config::test();
+        config.upstream_base_url = Some(format!("http://{address}"));
+        let router = build(config).await.unwrap();
+        let cases = [
+            (
+                "allowed",
+                StatusCode::OK,
+                json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:30:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"incident review","query":{"scenario":"allowed"}}),
+            ),
+            (
+                "denied",
+                StatusCode::FORBIDDEN,
+                json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T02:00:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"incident review"}),
+            ),
+            (
+                "upstream_error",
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:30:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"incident review","query":{"scenario":"failure"}}),
+            ),
+        ];
+
+        for (outcome, status, body) in cases {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/exports")
+                        .header("content-type", "application/json")
+                        .header("x-ter-admin-token", "test-admin-token")
+                        .header("x-export-user", "audit@example.com")
+                        .header("x-forwarded-for", "203.0.113.56")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            let receipt_id = if let Some(id) = response.headers().get("x-export-receipt-id") {
+                id.to_str().unwrap().to_owned()
+            } else {
+                let body = to_bytes(response.into_body(), 64_000).await.unwrap();
+                serde_json::from_slice::<Value>(&body).unwrap()["receipt_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            };
+            let receipt = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/v1/receipts/{receipt_id}"))
+                        .header("x-ter-admin-token", "test-admin-token")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let receipt: Value =
+                serde_json::from_slice(&to_bytes(receipt.into_body(), 64_000).await.unwrap())
+                    .unwrap();
+            assert_eq!(receipt["outcome"], outcome);
+            let verification = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/v1/receipts/{receipt_id}/verify"))
+                        .header("x-ter-admin-token", "test-admin-token")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let verification: Value =
+                serde_json::from_slice(&to_bytes(verification.into_body(), 64_000).await.unwrap())
+                    .unwrap();
+            assert_eq!(verification["valid"], true);
+        }
+    }
+
+    // @claim:bounded-get-export
+    #[tokio::test]
+    async fn claim_get_export_repeats_array_fields_and_reaches_upstream() {
         use axum::http::Uri;
 
         let upstream = Router::new().route(
@@ -1010,9 +1301,82 @@ mod tests {
         assert_eq!(other_client.status(), StatusCode::OK);
     }
 
+    // @claim:api-rate-limit
     #[tokio::test]
-    async fn export_rate_limit_cannot_be_bypassed_with_requester_names() {
+    async fn claim_api_rate_limit_uses_client_address_and_receipts_for_exports() {
         let router = app().await;
+        // Every protected read route shares the same client-address bucket and
+        // exposes a retry delay once that route's allowance is exhausted.
+        for (index, route) in [
+            "/api/v1/policy",
+            "/api/v1/receipts",
+            "/api/v1/receipts/missing",
+            "/api/v1/receipts/missing/markdown",
+            "/api/v1/receipts/missing/verify",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let client = format!("198.51.100.{}", index + 20);
+            for _ in 0..40 {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(*route)
+                            .header("x-ter-admin-token", "test-admin-token")
+                            .header("x-forwarded-for", &client)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_ne!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            }
+            let limited_read = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(*route)
+                        .header("x-ter-admin-token", "test-admin-token")
+                        .header("x-forwarded-for", &client)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(limited_read.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(limited_read.headers()[header::RETRY_AFTER], "1");
+        }
+        for _ in 0..20 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/exports")
+                        .header("x-forwarded-for", "198.51.100.99")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let anonymous_limited = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/exports")
+                    .header("x-forwarded-for", "198.51.100.99")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(anonymous_limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(anonymous_limited.headers()[header::RETRY_AFTER], "1");
         let body = json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T02:00:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"audit review"});
         for index in 0..20 {
             let response = router
@@ -1033,6 +1397,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
         }
         let limited = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -1048,6 +1413,27 @@ mod tests {
             .unwrap();
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(limited.headers()[header::RETRY_AFTER], "1");
+        let limited_json: Value =
+            serde_json::from_slice(&to_bytes(limited.into_body(), 64_000).await.unwrap()).unwrap();
+        let receipt_id = limited_json["receipt_id"]
+            .as_str()
+            .expect("the rate-limited export has a receipt");
+        let verification = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/receipts/{receipt_id}/verify"))
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .header("x-forwarded-for", "192.0.2.8")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(verification.status(), StatusCode::OK);
+        let verification: Value =
+            serde_json::from_slice(&to_bytes(verification.into_body(), 64_000).await.unwrap())
+                .unwrap();
+        assert_eq!(verification["valid"], true);
     }
 
     #[tokio::test]

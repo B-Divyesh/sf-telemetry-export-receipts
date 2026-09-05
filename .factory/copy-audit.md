@@ -1,6 +1,6 @@
 # Product copy audit
 
-Audited 2026-08-30 against `frontend/src/main.ts`. Counts treat symbols and hyphenated terms as one word. No sentence exceeds 22 words, and no banned marketing word is present.
+Audited 2026-09-05 against `frontend/src/main.ts`. Counts treat symbols and hyphenated terms as one word. No sentence exceeds 22 words, and no banned marketing word is present.
 
 ## First screen
 
@@ -44,6 +44,7 @@ The first screen states the job, audience, first action, privacy boundary, outpu
 | Refunds are handled there. | 4 |
 | Demo — sample data, nothing is saved. | 7 |
 | Sample receipt — no server record was created. | 8 |
+| Records export metadata without storing telemetry. | 6 |
 
 ## Terminology
 

@@ -22,13 +22,66 @@ test('public dashboard protects the receipt ledger and supports keyboard access'
   expect(consoleErrors).toEqual([])
 })
 
-test('administrator token opens the real isolated ledger without persistent browser storage', async ({ page }) => {
+test('@claim:administrator-access administrator token opens the real isolated ledger without persistent browser storage', async ({ page }) => {
   await page.goto('/')
   await page.getByLabel('Administrator token').fill(adminToken)
   await page.getByRole('button', { name: 'Open receipt desk' }).click()
   await expect(page.getByText('No crossings match')).toBeVisible()
   expect(await page.evaluate(() => localStorage.getItem('ter:admin-token'))).toBeNull()
   expect(await page.evaluate(() => sessionStorage.getItem('ter:admin-token'))).toBe(adminToken)
+})
+
+test('route changes move focus to the new page heading and announce it', async ({ page }) => {
+  await page.goto('/')
+  await page.locator('footer').getByRole('link', { name: 'Privacy' }).click()
+  await expect(page).toHaveURL('/privacy')
+  const privacyHeading = page.getByRole('heading', { level: 1, name: 'Privacy' })
+  await expect(privacyHeading).toBeFocused()
+  await expect(page.locator('#announcer')).toHaveText('Privacy loaded.')
+  await page.goBack()
+  const deskHeading = page.getByRole('heading', { level: 1, name: /Record every telemetry export/ })
+  await expect(deskHeading).toBeFocused()
+  await expect(page.locator('#announcer')).toHaveText(/Record every telemetry export\. loaded\./)
+})
+
+test('@claim:no-third-party-runtime first load has no analytics, ads, remote fonts, or runtime CDN requests', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block' })
+  const page = await context.newPage()
+  const requests: string[] = []
+  page.on('request', request => requests.push(request.url()))
+  await page.goto('/')
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  expect(requests.every(url => new URL(url).origin === 'http://127.0.0.1:8080')).toBe(true)
+  await context.close()
+})
+
+test('@claim:paid-license-unlock a returned or restored valid license unlocks the one-time archive without caching its token URL', async ({ page }) => {
+  await page.route('https://api.sociobot.in/api/v1/products/telemetry-export-receipts/verify?license=*', async route => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ valid: true, reason: 'ok', expires_at: null }) })
+  })
+  await page.goto('/')
+  await page.evaluate(async () => { await navigator.serviceWorker.ready })
+  await page.reload()
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null)
+  await page.goto('/?license=returned-license-token')
+  await expect(page).toHaveURL('/')
+  await expect(page.getByRole('button', { name: 'Download JSON archive' })).toBeVisible()
+  await expect(page.locator('.license-ticket')).toContainText('$49')
+  const cacheKeys = await page.evaluate(async () => {
+    const result: string[] = []
+    for (const name of await caches.keys()) {
+      for (const request of await (await caches.open(name)).keys()) result.push(request.url)
+    }
+    return result
+  })
+  expect(cacheKeys.some(url => url.includes('license=') || url.includes('returned-license-token'))).toBe(false)
+
+  await page.evaluate(() => localStorage.clear())
+  await page.reload()
+  await page.locator('.license-ticket summary').click()
+  await page.getByLabel('License token').fill('restored-license-token')
+  await page.getByRole('button', { name: 'Verify license' }).click()
+  await expect(page.getByRole('button', { name: 'Download JSON archive' })).toBeVisible()
 })
 
 test('@claim:demo-sandbox demo loads useful sample data without storage or third-party requests', async ({ page }) => {
