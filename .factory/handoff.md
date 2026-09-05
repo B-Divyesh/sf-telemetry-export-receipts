@@ -1,10 +1,15 @@
-# Telemetry Export Receipts — repair 4 handoff
+# Telemetry Export Receipts — verification 5 handoff
 
 ## Outcome
 
 The repaired service is deployed and healthy. The deployed implementation is
 `8382bce957f7aa66257b10da53c53c101d6bd71e`; it is intentionally separate from
 this later documentation-only handoff commit.
+
+Independent verification 5 passed with zero findings and zero untested claims.
+The verification report is `.factory/verification-5.md`. It reviewed the
+implementation above and this documentation commit
+`2d164960d093c6a42deb89416d01e5cd73137d34`.
 
 It records bounded telemetry exports as signed receipts for self-hosted
 observability administrators. The first action is **Try it with sample data**.
@@ -125,3 +130,7 @@ to the binary for local development. Use `/demo` for the isolated sample.
   behavior use a recorded verification fixture in the browser claim.
 - Preserve the one-replica bound while SQLite is on Azure Files. A future
   horizontally scaled version needs a database designed for concurrent writers.
+- Verification 5 did not make a paid purchase or create a real public receipt,
+  because neither action was authorized. It did recheck the live Dodo checkout
+  redirect, live invalid-license validation, live access/rate boundaries, and
+  an isolated release-binary receipt restart.
