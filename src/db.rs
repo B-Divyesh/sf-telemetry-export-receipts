@@ -1,5 +1,9 @@
 use crate::receipt::{Receipt, StoredReceipt};
-use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Row, SqlitePool,
+};
+use std::{str::FromStr, time::Duration};
 
 pub async fn connect(url: &str) -> Result<SqlitePool, sqlx::Error> {
     if let Some(path) = url
@@ -10,27 +14,38 @@ pub async fn connect(url: &str) -> Result<SqlitePool, sqlx::Error> {
             std::fs::create_dir_all(parent).ok();
         }
     }
+    // This service has one writer by design. A single pooled connection avoids
+    // self-contention on SQLite, including Azure Files where lock handoff can
+    // be slower during a revision transition.
+    let options = SqliteConnectOptions::from_str(url)?.busy_timeout(Duration::from_secs(30));
     let pool = SqlitePoolOptions::new()
-        .max_connections(if url == "sqlite::memory:" { 1 } else { 5 })
-        .connect(url)
+        .max_connections(1)
+        .connect_with(options)
         .await?;
-    sqlx::query(
-        include_str!("../migrations/0001_receipts.sql")
-            .split("CREATE INDEX")
-            .next()
-            .unwrap(),
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'receipts')",
     )
-    .execute(&pool)
+    .fetch_one(&pool)
     .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS receipts_created_at ON receipts(created_at DESC)")
+    if !exists {
+        sqlx::query(
+            include_str!("../migrations/0001_receipts.sql")
+                .split("CREATE INDEX")
+                .next()
+                .unwrap(),
+        )
         .execute(&pool)
         .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS receipts_requester ON receipts(requester)")
-        .execute(&pool)
-        .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS receipts_outcome ON receipts(outcome)")
-        .execute(&pool)
-        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS receipts_created_at ON receipts(created_at DESC)")
+            .execute(&pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS receipts_requester ON receipts(requester)")
+            .execute(&pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS receipts_outcome ON receipts(outcome)")
+            .execute(&pool)
+            .await?;
+    }
     Ok(pool)
 }
 
