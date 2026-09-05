@@ -20,14 +20,16 @@ The first screen states the job, audience, first action, privacy boundary, outpu
 
 | Copy | Words |
 | --- | ---: |
+| Signed export records. | 3 |
+| Bounded export → signed receipt. | 4 |
 | Machine-signed records from this installation. | 5 |
-| The newest crossing appears first. | 5 |
+| The newest receipt appears first. | 5 |
 | Sample policy active. | 3 |
 | Ready to issue receipts. | 4 |
 | Upstream needs configuration. | 3 |
 | You’re offline. | 2 |
 | Showing the most recently loaded receipt list. | 7 |
-| No crossings match. | 3 |
+| No receipts match. | 3 |
 | Send a bounded request through the export route, or clear the filters to see all receipts. | 15 |
 | Administrator access required. | 3 |
 | Enter the token from the server’s admin-access.key file. | 8 |

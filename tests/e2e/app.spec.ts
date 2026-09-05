@@ -26,7 +26,7 @@ test('@claim:administrator-access administrator token opens the real isolated le
   await page.goto('/')
   await page.getByLabel('Administrator token').fill(adminToken)
   await page.getByRole('button', { name: 'Open receipt desk' }).click()
-  await expect(page.getByText('No crossings match')).toBeVisible()
+  await expect(page.getByText('No receipts match')).toBeVisible()
   expect(await page.evaluate(() => localStorage.getItem('ter:admin-token'))).toBeNull()
   expect(await page.evaluate(() => sessionStorage.getItem('ter:admin-token'))).toBe(adminToken)
 })

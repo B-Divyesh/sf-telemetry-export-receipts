@@ -87,7 +87,7 @@ function shell(content: string, page: string) {
     <header class="site-header">
       <a class="brand" href="/" aria-label="TER. — Telemetry Export Receipts home"><span class="brand-mark">${icon('gate')}</span><span>TER<span class="brand-dot">.</span></span></a>
       <nav aria-label="Primary"><a ${page === 'desk' && !isDemo ? 'aria-current="page"' : ''} href="/">Receipt desk</a><a ${isDemo ? 'aria-current="page"' : ''} href="/demo">Demo</a><a href="/#integration">Integrate</a><a href="/#license">License</a></nav>
-      <span class="boundary"><i></i> Egress boundary</span>
+      <span class="boundary"><i></i> Export policy</span>
     </header>
     ${content}
     <footer><p><span class="footer-seal">${icon('seal')}</span> Records export metadata without storing telemetry.</p><nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/B-Divyesh/sf-telemetry-export-receipts">Source</a></nav><small>Built by Param Factory · Build ${buildId} · Original generated hero art · No analytics</small></footer>
@@ -136,11 +136,11 @@ function renderRoute(routeChanged = false) {
   shell(`
   <main id="main">
     <section class="hero" aria-labelledby="hero-title">
-      <div class="hero-copy"><p class="eyebrow"><span>01</span> Signed at the boundary</p><h1 id="hero-title">Record every<br><em>telemetry export.</em></h1><p class="lede">For observability teams, this proxy limits downloads and records who requested each one.</p><div class="hero-actions"><a class="button primary" href="/demo">Try it with sample data</a><a class="button quiet" href="#desk">Use your installation <span>↓</span></a></div><ul class="proof-points"><li>${icon('seal')} Signed JSON and Markdown</li><li>${icon('gate')} Result bodies never stored</li><li>${icon('download')} Optional archive costs $49 once</li></ul></div>
-      <figure class="hero-art"><picture><source media="(max-width: 600px)" srcset="/assets/receipt-gate-mobile.webp"><source srcset="/assets/receipt-gate.webp" type="image/webp"><img src="/assets/receipt-gate.jpg" width="960" height="640" fetchpriority="high" decoding="async" alt="An illustrated night-market gate turns abstract telemetry streams into a sealed paper receipt."></picture><figcaption><span>Policy gate</span><span>Bounded egress → signed proof</span></figcaption></figure>
+      <div class="hero-copy"><p class="eyebrow"><span>01</span> Signed export records</p><h1 id="hero-title">Record every<br><em>telemetry export.</em></h1><p class="lede">For observability teams, this proxy limits downloads and records who requested each one.</p><div class="hero-actions"><a class="button primary" href="/demo">Try it with sample data</a><a class="button quiet" href="#desk">Use your installation <span>↓</span></a></div><ul class="proof-points"><li>${icon('seal')} Signed JSON and Markdown</li><li>${icon('gate')} Result bodies never stored</li><li>${icon('download')} Optional archive costs $49 once</li></ul></div>
+      <figure class="hero-art"><picture><source media="(max-width: 600px)" srcset="/assets/receipt-gate-mobile.webp"><source srcset="/assets/receipt-gate.webp" type="image/webp"><img src="/assets/receipt-gate.jpg" width="960" height="640" fetchpriority="high" decoding="async" alt="An illustrated night-market gate turns abstract telemetry streams into a sealed paper receipt."></picture><figcaption><span>Export policy</span><span>Bounded export → signed receipt</span></figcaption></figure>
     </section>
     <section id="desk" class="desk" aria-labelledby="desk-title">
-      <div class="section-heading"><div><p class="eyebrow"><span>02</span> Live ledger</p><h2 id="desk-title">Receipt desk</h2></div><p>Machine-signed records from this installation. The newest crossing appears first.</p></div>
+      <div class="section-heading"><div><p class="eyebrow"><span>02</span> Receipt records</p><h2 id="desk-title">Receipt desk</h2></div><p>Machine-signed records from this installation. The newest receipt appears first.</p></div>
       <div class="desk-grid">
         <aside class="policy-board" aria-labelledby="policy-title"><div class="board-head"><span>${icon('gate')}</span><div><p>Active policy</p><h3 id="policy-title">Export boundary</h3></div></div><div id="policy-state" class="policy-loading" aria-live="polite"><span class="pulse"></span> Reading server policy…</div></aside>
         <div class="ledger">
@@ -150,7 +150,7 @@ function renderRoute(routeChanged = false) {
         </div>
       </div>
     </section>
-    <section id="integration" class="integration" aria-labelledby="integration-title"><div><p class="eyebrow"><span>03</span> One guarded route</p><h2 id="integration-title">Keep permissions.<br>Bound the query.</h2><p>The proxy forwards your existing <code>Authorization</code> and <code>Cookie</code> headers only to the configured upstream. Your trusted auth proxy supplies requester identity. The upstream body and status return with receipt ID and signature headers.</p></div><div class="code-panel"><div class="code-head"><span><i></i><i></i><i></i></span><button id="copy-curl" type="button">${icon('copy')} Copy request</button></div><pre><code id="curl-example">curl -X POST https://your-host/api/v1/exports \\
+    <section id="integration" class="integration" aria-labelledby="integration-title"><div><p class="eyebrow"><span>03</span> Export request</p><h2 id="integration-title">Keep permissions.<br>Bound the query.</h2><p>The proxy forwards your existing <code>Authorization</code> and <code>Cookie</code> headers only to the configured upstream. Your trusted auth proxy supplies requester identity. The upstream body and status return with receipt ID and signature headers.</p></div><div class="code-panel"><div class="code-head"><span><i></i><i></i><i></i></span><button id="copy-curl" type="button">${icon('copy')} Copy request</button></div><pre><code id="curl-example">curl -X POST https://your-host/api/v1/exports \\
   -H 'Authorization: Bearer …' \\
   -H 'X-TER-Admin-Token: …' \\
   -H 'X-Export-User: ada@example.com' \\
@@ -332,7 +332,7 @@ function renderReceipts(receipts: Receipt[]) {
   list.innerHTML = ''
   if (!receipts.length) {
     list.classList.add('empty')
-    list.innerHTML = `<div class="empty-seal" aria-hidden="true">${icon('seal')}</div><h3>No crossings match</h3><p>Send a bounded request through <code>/api/v1/exports</code>, or clear the filters to see all receipts.</p><a class="button quiet" href="#integration">View integration request</a>`
+    list.innerHTML = `<div class="empty-seal" aria-hidden="true">${icon('seal')}</div><h3>No receipts match</h3><p>Send a bounded request through <code>/api/v1/exports</code>, or clear the filters to see all receipts.</p><a class="button quiet" href="#integration">View integration request</a>`
     return
   }
   list.classList.remove('empty')
