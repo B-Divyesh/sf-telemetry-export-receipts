@@ -1,74 +1,48 @@
-# Telemetry Export Receipts — verification 5 handoff
+# Telemetry Export Receipts — review 1 handoff
 
 ## Outcome
 
-The repaired service is deployed and healthy. The deployed implementation is
-`8382bce957f7aa66257b10da53c53c101d6bd71e`; it is intentionally separate from
-this later documentation-only handoff commit.
+**FAIL — 2 medium findings, 0 untested declared claims.**
 
-Independent verification 5 passed with zero findings and zero untested claims.
-The verification report is `.factory/verification-5.md`. It reviewed the
-implementation above and this documentation commit
-`2d164960d093c6a42deb89416d01e5cd73137d34`.
+The strict review is in `.factory/review-1.md`. No product code was changed.
+The reviewed implementation is
+`8382bce957f7aa66257b10da53c53c101d6bd71e`; the documentation head at review
+start was `ea1e53b90ea1dfb5bc5c9fed07405176d441d573`. Live reports build
+`2d164960d093c6a42deb89416d01e5cd73137d34`, and its HTML, JS, and CSS are
+byte-identical to the implementation candidate built with that build ID.
 
-It records bounded telemetry exports as signed receipts for self-hosted
-observability administrators. The first action is **Try it with sample data**.
+## Findings to repair
 
-## Repairs completed
+1. `/demo` opens on the repeated landing hero. At 1440 × 900 the first receipt
+   starts at 1,257 px; at 390 × 844 it starts at 2,294 px. Put the populated
+   receipt desk in the first post-click viewport and state beside the action
+   what sample will load.
+2. Add the required three-step **How it works** section and a dedicated
+   privacy/non-goals section before the paid offer on the landing page.
 
-- The live Container App now has one active, healthy replica and an Azure Files
-  volume mounted at `/data`. Its minimum and maximum replica counts are both
-  one. SQLite, the generated signing key, and the generated administrator token
-  persist there.
-- SQLite uses one connection and the Azure Files-compatible `unix-none` VFS.
-  This is safe only for this deliberately single-serving-replica deployment;
-  do not scale it horizontally or overlap writers.
-- Identified, authenticated exports that hit the export limit now receive a
-  signed denied receipt as well as `429 Retry-After`. Unauthenticated requests
-  remain rate-limited, but do not create an unattributable receipt.
-- The registered USD 49 one-time Archive License remains advertised. The live
-  checkout endpoint redirects to the hosted Dodo checkout, and license
-  verification handles an invalid token correctly. Returned licenses are
-  stored locally, verified in the background, restorable, and unlock the paid
-  archive UI without gating the free export safeguards.
-- Service-worker cache version 4 deletes previous caches on activation and
-  never caches URLs containing `license`.
-- Internal navigation now changes route titles, moves focus to the new `h1`,
-  and announces the new page. The legal and 404 routes retain the standard
-  structure.
-- The claim register now has 13 outcome-based checks covering demo isolation,
-  offline reload, denied/allowed/upstream-failed receipts, signed downloads,
-  privacy-preserving forwarding, GET bounds, administrator access, runtime
-  origins, API limits, startup, and the paid license flow.
-- Landing and application labels were rewritten in direct operational language.
-  The catalog description is verb-first and is copied to
-  `/work/.evidence/catalog-description.txt`.
+## What passed
 
-## Live deployment evidence
+- Every one of the 13 declared claim commands passed from a clean detached
+  checkout. There are no untested declared or public claims.
+- `npm test`, `npm run check`, `npm run build`, `npm run test:e2e`, release
+  build, audits, formatting, and diff checks passed.
+- Fresh desktop and phone checks passed for plain first-screen copy, sample
+  content, reset, isolation, Start for real, keyboard, focus, 200% scale,
+  44 px targets, reduced motion, legal routes, designed 404, links, and offline
+  reload.
+- Axe 4.12.1 found no serious or critical issues. The factory URL verifier
+  passed.
+- Live health, anonymous protection, first-hop rate limiting, 429
+  `Retry-After`, security headers, local restart persistence, boundary cases,
+  and recovery paths passed.
+- Checkout reaches the registered Dodo-hosted **Telemetry Export Receipts
+  Archive License** at US$49 once. Real invalid-token verification, URL
+  stripping, cache exclusion, and locked-state recovery passed. The recorded
+  valid-return and restore claim test passed.
+- Mobile Lighthouse: 100 Performance, 100 Accessibility, 100 Best Practices,
+  and 100 SEO. FCP 1.2 s, LCP 1.5 s, CLS 0, TBT 50 ms.
 
-- URL: `https://telemetry-export-receipts.sociobot.in`
-- Revision: `sf-telemetry-export-receipts--0000011`
-- Image: `sociobotregistry.azurecr.io/sf-telemetry-export-receipts:8382bce957f7`
-- Cold `/health`: `200` with build SHA `8382bce957f7aa66257b10da53c53c101d6bd71e`.
-- A fresh desktop browser and a 390 px phone browser both showed the job,
-  audience, and **Try it with sample data** before scrolling. The one-click
-  sample showed Ada's populated receipt records, the persistent demo label,
-  reset action, and no real-data writes.
-- Fresh live navigation to Privacy focused its `h1` and announced “Privacy
-  loaded.” A fresh license-bearing return URL was stripped and its token was
-  absent from Cache Storage. Normal-page browser-console checks were clean.
-- A concurrent live rate-limit check produced 200 and 429 responses; a sampled
-  429 included `Retry-After: 1`.
-- Checkout followed one redirect to the hosted Dodo checkout and ended at 200.
-  A synthetic invalid token verified as `{ "valid": false, "reason": "invalid" }`.
-- `verify-url.sh` passed title, language, one `h1`, `main`, image-alt, button,
-  and console checks. Axe found zero serious or critical issues on the live
-  demo. Current Lighthouse scores were Performance 98, Accessibility 100,
-  Best Practices 100, and SEO 100. Lighthouse's final screenshot collection
-  crashed after producing these audit results; the result JSON is retained in
-  `/work/.evidence/ter-final/lighthouse.json`.
-
-## Verification from a documented clean setup
+## Verification commands
 
 ```sh
 npm ci --no-audit --no-fund
@@ -83,28 +57,8 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-All commands passed. `dist/` is produced; the initial application JavaScript is
-9.02 KB gzip and CSS is 4.60 KB gzip. Both dependency audits report zero
-vulnerabilities.
-
-Every declared command in `.factory/claims.json` was also run independently
-and passed (13/13):
-
-```sh
-npx playwright test -g '@claim:demo-sandbox'
-npx playwright test -g '@claim:offline-reload'
-npx playwright test -g '@claim:denied-receipt'
-npx vitest run -t '@claim:archive-json'
-cargo test --test startup port_only_startup_generates_and_reports_configuration_sources
-cargo test --lib app::tests::claim_allowed_denied_and_upstream_failed_exports_have_signed_receipts -- --exact
-cargo test --lib app::tests::claim_receipts_are_signed_and_downloadable_as_json_and_markdown -- --exact
-cargo test --lib app::tests::claim_allowed_exports_forward_only_permitted_headers_and_store_no_result_data -- --exact
-cargo test --lib app::tests::claim_get_export_repeats_array_fields_and_reaches_upstream -- --exact
-npx playwright test -g '@claim:administrator-access'
-npx playwright test -g '@claim:no-third-party-runtime'
-cargo test --lib app::tests::claim_api_rate_limit_uses_client_address_and_receipts_for_exports -- --exact
-npx playwright test -g '@claim:paid-license-unlock'
-```
+Run each command in `.factory/claims.json` exactly as written. Live browser and
+backend evidence is under `/work/.evidence/` for this review.
 
 ## How to run
 
@@ -114,23 +68,17 @@ npm run build
 cargo run
 ```
 
-The service listens on `PORT` (default `8080`) with no required environment
-variables. It creates durable state in `/data` when that mount exists, or next
-to the binary for local development. Use `/demo` for the isolated sample.
+The service listens on `PORT` (default 8080) without required configuration.
+It uses `/data` when that mount exists and a local `data/` directory otherwise.
+Use `/demo` for the isolated sample.
 
-## Known limits and next steps
+## Known constraints
 
-- The public upstream target is intentionally not configured, and this repair
-  worker was not authorized to read the generated administrator token. It
-  therefore did not create or read a real public receipt across a controlled
-  restart. Isolated integration tests cover creation, retrieval, signatures,
-  persistence, error recovery, and rate-limit receipt behavior.
-- No real purchase was made to avoid a charge. The live hosted checkout and
-  invalid-token verification were checked; the valid-return and restoration
-  behavior use a recorded verification fixture in the browser claim.
-- Preserve the one-replica bound while SQLite is on Azure Files. A future
-  horizontally scaled version needs a database designed for concurrent writers.
-- Verification 5 did not make a paid purchase or create a real public receipt,
-  because neither action was authorized. It did recheck the live Dodo checkout
-  redirect, live invalid-license validation, live access/rate boundaries, and
-  an isolated release-binary receipt restart.
+The public upstream is intentionally unconfigured, so normal upstream behavior
+was exercised against isolated test servers rather than live telemetry. No
+production receipt, administrator credential, or payment was created or read.
+Docker and Podman were unavailable; the release binary and deployed artifact
+were verified directly.
+
+Keep the deployed SQLite service at one replica with its durable `/data` mount.
+Horizontal writers require a different database design.
