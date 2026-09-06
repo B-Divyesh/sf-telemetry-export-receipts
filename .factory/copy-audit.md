@@ -1,6 +1,6 @@
 # Product copy audit
 
-Audited 2026-09-05 against `frontend/src/main.ts`. Counts treat symbols and hyphenated terms as one word. No sentence exceeds 22 words, and no banned marketing word is present.
+Audited 2026-09-06 against `frontend/src/main.ts`. Counts treat symbols and hyphenated terms as one word. No sentence exceeds 22 words, and no banned marketing word is present.
 
 ## First screen
 
@@ -9,12 +9,44 @@ Audited 2026-09-05 against `frontend/src/main.ts`. Counts treat symbols and hyph
 | Record every telemetry export. | 4 |
 | For observability teams, this proxy limits downloads and records who requested each one. | 13 |
 | Try it with sample data. | 6 |
+| Loads allowed, denied, and upstream-error sample receipts. | 6 |
 | Use your installation. | 3 |
 | Signed JSON and Markdown. | 4 |
 | Result bodies never stored. | 4 |
 | Optional archive costs $49 once. | 5 |
 
 The first screen states the job, audience, first action, privacy boundary, output, and price in one view.
+
+## Landing sections
+
+| Copy | Words |
+| --- | ---: |
+| How it works. | 3 |
+| Each export has one declared policy check and one signed record. | 11 |
+| Send a bounded export request. | 5 |
+| Use an approved endpoint and declare the time range, row cap, fields, and purpose. | 14 |
+| Check the declared policy. | 5 |
+| The proxy checks the bounds before it forwards your existing upstream authorization. | 11 |
+| Keep a signed receipt. | 5 |
+| The receipt records who requested the export, its bounds, and its outcome. | 12 |
+| Send an approved export request. | 5 |
+| What it does not do. | 5 |
+| It keeps export metadata, a query digest, and a signature. | 10 |
+| It does not keep telemetry. | 5 |
+| It does not store result bodies. | 6 |
+| It does not replace upstream permissions. | 6 |
+| It does not provide telemetry dashboards. | 6 |
+
+## Demo entry
+
+| Copy | Words |
+| --- | ---: |
+| Review sample export receipts. | 4 |
+| Three realistic receipts are ready below. | 6 |
+| They never reach your installation. | 5 |
+| View sample receipts. | 3 |
+| Sample receipt desk. | 3 |
+| Filter the three sample outcomes, then open a receipt to inspect its signed fields. | 14 |
 
 ## Product and state copy
 

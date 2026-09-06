@@ -4,7 +4,7 @@
     "claim": "The sample-data demo does not save data or contact third parties.",
     "where": "landing primary action and demo banner",
     "test": "npx playwright test -g '@claim:demo-sandbox'",
-    "sandbox": "fresh browser context at /demo; assert realistic receipts, empty browser storage, and same-origin requests only"
+    "sandbox": "fresh browser context; use the landing action, then assert realistic receipts in the first demo view, empty browser storage, and same-origin requests only"
   },
   {
     "id": "offline-reload",

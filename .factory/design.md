@@ -26,9 +26,11 @@ No network fonts. Headings use `Arial Narrow`, `Aptos Narrow`, and system sans f
 
 ## Layout and spacing
 
-An 8 px rhythm with 4 px for optical nudges. Desktop is a wide counter: 24–40 px gutters, a 12-column grid, and a 1240 px maximum. The policy board occupies four columns while the receipt ledger occupies eight. On 390 px screens the board becomes a compact strip, secondary receipt fields fold below the summary, and the filter row stacks. Targets are at least 44 px; readable text stays within 72 characters.
+An 8 px rhythm with 4 px for optical nudges. Desktop is a wide counter: 24–40 px gutters, a 12-column grid, and a 1240 px maximum. The policy board occupies four columns while the receipt ledger occupies eight. On 390 px screens the populated demo puts the ledger before the policy board, uses a two-column filter row, and keeps the first receipt in the opening viewport. Secondary receipt fields fold below the summary. Targets are at least 44 px; readable text stays within 72 characters.
 
 Receipt entries are perforated horizontal strips rather than generic cards. Dashed rules mean machine-verifiable boundaries; rounded solid panels are reserved for controls. Tiny offset cyan/coral shadows evoke misregistered neon tubes and only appear on the wordmark and primary action.
+
+The landing explanation uses one continuous three-part receipt strip rather than feature cards: request, policy check, then signed receipt. The privacy/non-goals section is a boundary notice with coral exclusion marks and dashed ledger rules. These sections retain the proof-desk visual language while making scope clear before the paid archive.
 
 ## Interaction grammar
 

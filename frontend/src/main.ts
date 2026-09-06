@@ -86,7 +86,7 @@ function shell(content: string, page: string) {
     ${isDemo ? '<aside class="demo-banner" aria-label="Demo mode"><strong>Demo — sample data, nothing is saved</strong><span><a href="/demo">Reset demo</a><a href="/">Start for real</a></span></aside>' : ''}
     <header class="site-header">
       <a class="brand" href="/" aria-label="TER. — Telemetry Export Receipts home"><span class="brand-mark">${icon('gate')}</span><span>TER<span class="brand-dot">.</span></span></a>
-      <nav aria-label="Primary"><a ${page === 'desk' && !isDemo ? 'aria-current="page"' : ''} href="/">Receipt desk</a><a ${isDemo ? 'aria-current="page"' : ''} href="/demo">Demo</a><a href="/#integration">Integrate</a><a href="/#license">License</a></nav>
+      <nav aria-label="Primary"><a href="/#desk">Receipt desk</a><a ${isDemo ? 'aria-current="page"' : ''} href="/demo">Demo</a><a href="/#how-it-works">How it works</a><a ${page === 'privacy' ? 'aria-current="page"' : ''} href="/privacy">Privacy</a></nav>
       <span class="boundary"><i></i> Export policy</span>
     </header>
     ${content}
@@ -108,7 +108,7 @@ function legalPage(kind: 'privacy' | 'terms') {
     <h2>Warranty</h2><p>The open-source software is provided under the MIT License, without warranty. Review and test configuration before using it for a compliance program.</p><p><em>Effective 28 August 2026.</em></p></main>`
   document.title = `${kind === 'privacy' ? 'Privacy' : 'Terms'} — Telemetry Export Receipts`
   setCanonical(`/${kind}`)
-  shell(kind === 'privacy' ? privacy : terms, 'legal')
+  shell(kind === 'privacy' ? privacy : terms, kind)
 }
 
 function setCanonical(route: string) {
@@ -133,24 +133,17 @@ function renderRoute(routeChanged = false) {
     document.title = 'Demo — Telemetry Export Receipts'
     setCanonical('/demo')
   }
-  shell(`
-  <main id="main">
-    <section class="hero" aria-labelledby="hero-title">
-      <div class="hero-copy"><p class="eyebrow"><span>01</span> Signed export records</p><h1 id="hero-title">Record every<br><em>telemetry export.</em></h1><p class="lede">For observability teams, this proxy limits downloads and records who requested each one.</p><div class="hero-actions"><a class="button primary" href="/demo">Try it with sample data</a><a class="button quiet" href="#desk">Use your installation <span>↓</span></a></div><ul class="proof-points"><li>${icon('seal')} Signed JSON and Markdown</li><li>${icon('gate')} Result bodies never stored</li><li>${icon('download')} Optional archive costs $49 once</li></ul></div>
+  const landingHero = `<section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy"><p class="eyebrow"><span>01</span> Signed export records</p><h1 id="hero-title">Record every<br><em>telemetry export.</em></h1><p class="lede">For observability teams, this proxy limits downloads and records who requested each one.</p><div class="hero-actions"><a class="button primary" href="/demo">Try it with sample data</a><span class="action-note">Loads allowed, denied, and upstream-error sample receipts.</span></div><a class="hero-secondary" href="#desk">Use your installation <span aria-hidden="true">↓</span></a><ul class="proof-points"><li>${icon('seal')} Signed JSON and Markdown</li><li>${icon('gate')} Result bodies never stored</li><li>${icon('download')} Optional archive costs $49 once</li></ul></div>
       <figure class="hero-art"><picture><source media="(max-width: 600px)" srcset="/assets/receipt-gate-mobile.webp"><source srcset="/assets/receipt-gate.webp" type="image/webp"><img src="/assets/receipt-gate.jpg" width="960" height="640" fetchpriority="high" decoding="async" alt="An illustrated night-market gate turns abstract telemetry streams into a sealed paper receipt."></picture><figcaption><span>Export policy</span><span>Bounded export → signed receipt</span></figcaption></figure>
-    </section>
-    <section id="desk" class="desk" aria-labelledby="desk-title">
-      <div class="section-heading"><div><p class="eyebrow"><span>02</span> Receipt records</p><h2 id="desk-title">Receipt desk</h2></div><p>Machine-signed records from this installation. The newest receipt appears first.</p></div>
-      <div class="desk-grid">
-        <aside class="policy-board" aria-labelledby="policy-title"><div class="board-head"><span>${icon('gate')}</span><div><p>Active policy</p><h3 id="policy-title">Export boundary</h3></div></div><div id="policy-state" class="policy-loading" aria-live="polite"><span class="pulse"></span> Reading server policy…</div></aside>
-        <div class="ledger">
-          <form id="filters" class="filters" role="search"><div class="field"><label for="requester">Requester</label><input id="requester" name="requester" type="search" autocomplete="off" placeholder="name@example.com"></div><div class="field"><label for="outcome">Outcome</label><select id="outcome" name="outcome"><option value="">All outcomes</option><option value="allowed">Allowed</option><option value="denied">Denied</option><option value="upstream_error">Upstream error</option></select></div><button class="icon-button" type="submit">${icon('refresh')} Refresh</button></form>
-          <div id="network-state" class="network-state" hidden role="status">You’re offline. Showing the most recently loaded receipt list.</div>
-          <div id="receipt-list" class="receipt-list" aria-live="polite" aria-busy="true"><div class="loading-receipt"><span></span><span></span><span></span></div><p>Opening the ledger…</p></div>
-        </div>
-      </div>
-    </section>
-    <section id="integration" class="integration" aria-labelledby="integration-title"><div><p class="eyebrow"><span>03</span> Export request</p><h2 id="integration-title">Keep permissions.<br>Bound the query.</h2><p>The proxy forwards your existing <code>Authorization</code> and <code>Cookie</code> headers only to the configured upstream. Your trusted auth proxy supplies requester identity. The upstream body and status return with receipt ID and signature headers.</p></div><div class="code-panel"><div class="code-head"><span><i></i><i></i><i></i></span><button id="copy-curl" type="button">${icon('copy')} Copy request</button></div><pre><code id="curl-example">curl -X POST https://your-host/api/v1/exports \\
+    </section>`
+  const demoIntro = `<section class="demo-intro" aria-labelledby="demo-title"><div><p class="eyebrow"><span>Sample</span> Isolated receipt desk</p><h1 id="demo-title">Review sample<br><em>export receipts.</em></h1><p>Three realistic receipts are ready below. They never reach your installation.</p></div><a class="demo-jump" href="#sample-receipts">View sample receipts <span aria-hidden="true">↓</span></a></section>`
+  const deskHeading = isDemo
+    ? '<div class="section-heading demo-desk-heading"><div><p class="eyebrow"><span>Sample</span> Populated output</p><h2 id="desk-title">Sample receipt desk</h2></div><p>Filter the three sample outcomes, then open a receipt to inspect its signed fields.</p></div>'
+    : '<div class="section-heading"><div><p class="eyebrow"><span>02</span> Receipt records</p><h2 id="desk-title">Receipt desk</h2></div><p>Machine-signed records from this installation. The newest receipt appears first.</p></div>'
+  const supportingSections = isDemo ? '' : `
+    <section id="how-it-works" class="how-it-works" aria-labelledby="how-title"><div class="section-intro"><p class="eyebrow"><span>03</span> Three steps</p><h2 id="how-title">How it works</h2><p>Each export has one declared policy check and one signed record.</p></div><ol class="how-steps"><li><span class="step-number" aria-hidden="true">01</span><h3>Send a bounded export request</h3><p>Use an approved endpoint and declare the time range, row cap, fields, and purpose.</p></li><li><span class="step-number" aria-hidden="true">02</span><h3>Check the declared policy</h3><p>The proxy checks the bounds before it forwards your existing upstream authorization.</p></li><li><span class="step-number" aria-hidden="true">03</span><h3>Keep a signed receipt</h3><p>The receipt records who requested the export, its bounds, and its outcome.</p></li></ol></section>
+    <section id="integration" class="integration" aria-labelledby="integration-title"><div><p class="eyebrow"><span>04</span> Export request</p><h2 id="integration-title">Send an approved<br>export request.</h2><p>The proxy forwards your existing <code>Authorization</code> and <code>Cookie</code> headers only to the configured upstream. Your trusted auth proxy supplies requester identity. The upstream body and status return with receipt ID and signature headers.</p></div><div class="code-panel"><div class="code-head"><span><i></i><i></i><i></i></span><button id="copy-curl" type="button">${icon('copy')} Copy request</button></div><pre><code id="curl-example">curl -X POST https://your-host/api/v1/exports \\
   -H 'Authorization: Bearer …' \\
   -H 'X-TER-Admin-Token: …' \\
   -H 'X-Export-User: ada@example.com' \\
@@ -164,7 +157,23 @@ function renderRoute(routeChanged = false) {
     "redaction_policy": "pii-basic",
     "purpose": "INC-204 response"
   }'</code></pre><p class="code-note"><span>Response headers</span> X-Export-Receipt-Id · X-Export-Receipt-Signature</p></div></section>
-    <section id="license" class="license-section" aria-labelledby="license-title"><div class="license-copy"><p class="eyebrow"><span>04</span> Optional paid archive</p><h2 id="license-title">Export a receipt archive.</h2><p>The core proxy and individual signed receipts stay free. Fleet archive packages the loaded audit set for an offline review or handoff.</p><ul><li>Bulk JSON archive from current filters</li><li>Portable, no recurring data-volume fee</li><li>One installation license</li></ul></div><div class="license-ticket"><p class="ticket-kicker">Fleet archive</p><p class="price"><strong>$49</strong> <span>once</span></p><p id="license-status">License not installed</p><a id="buy-license" class="button primary" href="https://api.sociobot.in/api/v1/products/telemetry-export-receipts/checkout">Buy one-time license <span>↗</span></a><button id="download-archive" class="button primary" type="button" aria-label="Download JSON archive" hidden>${icon('download')} Download JSON archive</button><details><summary>Have a license? Restore it</summary><form id="license-form"><label for="license-token">License token</label><input id="license-token" name="license" autocomplete="off" spellcheck="false"><button type="submit" class="button quiet" aria-label="Verify license">Verify license</button></form></details><p class="legal-note">Sociobot/Dodo is merchant of record. Refunds are handled there. <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p></div></section>
+    <section id="privacy-boundary" class="privacy-boundary" aria-labelledby="privacy-boundary-title"><div><p class="eyebrow"><span>05</span> Privacy and limits</p><h2 id="privacy-boundary-title">What it does not do</h2><p>It keeps export metadata, a query digest, and a signature. It does not keep telemetry.</p></div><ul><li><span aria-hidden="true">×</span> It does not store result bodies.</li><li><span aria-hidden="true">×</span> It does not replace upstream permissions.</li><li><span aria-hidden="true">×</span> It does not provide telemetry dashboards.</li></ul></section>`
+  shell(`
+  <main id="main"${isDemo ? ' class="demo-page"' : ''}>
+    ${isDemo ? demoIntro : landingHero}
+    <section id="desk" class="desk${isDemo ? ' demo-desk' : ''}" aria-labelledby="desk-title">
+      ${deskHeading}
+      <div class="desk-grid"${isDemo ? ' id="sample-receipts"' : ''}>
+        <aside class="policy-board" aria-labelledby="policy-title"><div class="board-head"><span>${icon('gate')}</span><div><p>Active policy</p><h3 id="policy-title">Export boundary</h3></div></div><div id="policy-state" class="policy-loading" aria-live="polite"><span class="pulse"></span> Reading server policy…</div></aside>
+        <div class="ledger">
+          <form id="filters" class="filters" role="search"><div class="field"><label for="requester">Requester</label><input id="requester" name="requester" type="search" autocomplete="off" placeholder="name@example.com"></div><div class="field"><label for="outcome">Outcome</label><select id="outcome" name="outcome"><option value="">All outcomes</option><option value="allowed">Allowed</option><option value="denied">Denied</option><option value="upstream_error">Upstream error</option></select></div><button class="icon-button" type="submit">${icon('refresh')} Refresh</button></form>
+          <div id="network-state" class="network-state" hidden role="status">You’re offline. Showing the most recently loaded receipt list.</div>
+          <div id="receipt-list" class="receipt-list"${isDemo ? ' aria-label="Sample receipts"' : ''} aria-live="polite" aria-busy="true"><div class="loading-receipt"><span></span><span></span><span></span></div><p>Opening the ledger…</p></div>
+        </div>
+      </div>
+    </section>
+    ${supportingSections}
+    <section id="license" class="license-section" aria-labelledby="license-title"><div class="license-copy"><p class="eyebrow"><span>${isDemo ? 'Sample' : '06'}</span> Optional paid archive</p><h2 id="license-title">Export a receipt archive.</h2><p>The core proxy and individual signed receipts stay free. Fleet archive packages the loaded audit set for an offline review or handoff.</p><ul><li>Bulk JSON archive from current filters</li><li>Portable, no recurring data-volume fee</li><li>One installation license</li></ul></div><div class="license-ticket"><p class="ticket-kicker">Fleet archive</p><p class="price"><strong>$49</strong> <span>once</span></p><p id="license-status">License not installed</p><a id="buy-license" class="button primary" href="https://api.sociobot.in/api/v1/products/telemetry-export-receipts/checkout">Buy one-time license <span>↗</span></a><button id="download-archive" class="button primary" type="button" aria-label="Download JSON archive" hidden>${icon('download')} Download JSON archive</button><details><summary>Have a license? Restore it</summary><form id="license-form"><label for="license-token">License token</label><input id="license-token" name="license" autocomplete="off" spellcheck="false"><button type="submit" class="button quiet" aria-label="Verify license">Verify license</button></form></details><p class="legal-note">Sociobot/Dodo is merchant of record. Refunds are handled there. <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p></div></section>
   </main>`, 'desk')
   void initDesk()
   } else {
@@ -222,7 +231,7 @@ async function initDesk() {
 
 function bindInteractions() {
   document.querySelector<HTMLFormElement>('#filters')!.addEventListener('submit', event => { event.preventDefault(); void loadReceipts() })
-  document.querySelector('#copy-curl')!.addEventListener('click', async () => {
+  document.querySelector('#copy-curl')?.addEventListener('click', async () => {
     const value = document.querySelector('#curl-example')!.textContent || ''
     try { await navigator.clipboard.writeText(value); announce('Request copied to clipboard.'); setButtonText('#copy-curl', 'Copied') }
     catch { announce('Copy failed. Select the request text and copy it manually.') }
