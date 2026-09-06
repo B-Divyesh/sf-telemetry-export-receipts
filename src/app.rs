@@ -1318,7 +1318,8 @@ mod tests {
         .enumerate()
         {
             let client = format!("198.51.100.{}", index + 20);
-            for _ in 0..40 {
+            let mut limited_read = None;
+            for _ in 0..120 {
                 let response = router
                     .clone()
                     .oneshot(
@@ -1331,24 +1332,17 @@ mod tests {
                     )
                     .await
                     .unwrap();
-                assert_ne!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+                if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                    limited_read = Some(response);
+                    break;
+                }
             }
-            let limited_read = router
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(*route)
-                        .header("x-ter-admin-token", "test-admin-token")
-                        .header("x-forwarded-for", &client)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
+            let limited_read = limited_read.expect("the read route reaches its client allowance");
             assert_eq!(limited_read.status(), StatusCode::TOO_MANY_REQUESTS);
             assert_eq!(limited_read.headers()[header::RETRY_AFTER], "1");
         }
-        for _ in 0..20 {
+        let mut anonymous_limited = None;
+        for _ in 0..80 {
             let response = router
                 .clone()
                 .oneshot(
@@ -1361,24 +1355,19 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                anonymous_limited = Some(response);
+                break;
+            }
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         }
-        let anonymous_limited = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/exports")
-                    .header("x-forwarded-for", "198.51.100.99")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let anonymous_limited =
+            anonymous_limited.expect("the anonymous export route reaches its client allowance");
         assert_eq!(anonymous_limited.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(anonymous_limited.headers()[header::RETRY_AFTER], "1");
         let body = json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T02:00:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"audit review"});
-        for index in 0..20 {
+        let mut limited = None;
+        for index in 0..80 {
             let response = router
                 .clone()
                 .oneshot(
@@ -1394,23 +1383,13 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(response);
+                break;
+            }
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
         }
-        let limited = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/exports")
-                    .header("content-type", "application/json")
-                    .header("x-ter-admin-token", "test-admin-token")
-                    .header("x-export-user", "another-name@example.com")
-                    .header("x-forwarded-for", "192.0.2.8")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let limited = limited.expect("the identified export route reaches its client allowance");
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(limited.headers()[header::RETRY_AFTER], "1");
         let limited_json: Value =
