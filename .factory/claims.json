@@ -67,7 +67,7 @@
     "claim": "Receipt reads and exports require administrator access, and the browser keeps that token only for the current tab.",
     "where": "receipt desk, privacy page, README",
     "test": "npx playwright test -g '@claim:administrator-access'",
-    "sandbox": "fresh browser opens the protected desk with the test administrator token and asserts sessionStorage, not localStorage, holds it"
+    "sandbox": "fresh anonymous receipt and export requests return 401; then a fresh browser opens the protected desk with the test administrator token and asserts sessionStorage, not localStorage, holds it"
   },
   {
     "id": "no-third-party-runtime",
@@ -89,5 +89,26 @@
     "where": "license section and terms",
     "test": "npx playwright test -g '@claim:paid-license-unlock'",
     "sandbox": "recorded valid Sociobot verification response; exercise return and restore, assert archive unlock and Cache Storage contains no license URL"
+  },
+  {
+    "id": "receipt-write-failure",
+    "claim": "If a mandatory receipt cannot be stored after an upstream response, the upstream result is withheld.",
+    "where": "README export behavior",
+    "test": "cargo test --lib app::tests::claim_upstream_result_is_withheld_when_receipt_write_fails -- --exact",
+    "sandbox": "isolated upstream returns a private result marker; remove the test receipt table before export and assert the server returns receipt_write_failed without the upstream marker"
+  },
+  {
+    "id": "request-body-logs",
+    "claim": "Application logs do not include request-body values.",
+    "where": "README privacy and security notes",
+    "test": "cargo test --test startup claim_request_bodies_are_not_logged -- --exact",
+    "sandbox": "fresh server process receives a policy-denied export with a unique marker in its body; capture process output and assert the route is logged but the marker is absent"
+  },
+  {
+    "id": "revoked-license-lock",
+    "claim": "A refunded license response locks Fleet archive while the free receipt desk remains available.",
+    "where": "terms",
+    "test": "npx playwright test -g '@claim:revoked-license-lock'",
+    "sandbox": "recorded Sociobot valid:false reason:revoked response for a returned license; assert the archive stays locked, the buy link returns, and the free receipt desk remains available"
   }
 ]

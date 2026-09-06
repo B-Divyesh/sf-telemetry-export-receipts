@@ -1101,6 +1101,67 @@ mod tests {
         assert!(!receipt_text.contains("upstream-cookie"));
     }
 
+    // @claim:receipt-write-failure
+    #[tokio::test]
+    async fn claim_upstream_result_is_withheld_when_receipt_write_fails() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let upstream_requests = Arc::new(AtomicUsize::new(0));
+        let upstream_counter = Arc::clone(&upstream_requests);
+        let upstream = Router::new().route(
+            "/api/logs/export",
+            post(move || {
+                let upstream_counter = Arc::clone(&upstream_counter);
+                async move {
+                    upstream_counter.fetch_add(1, Ordering::SeqCst);
+                    (StatusCode::OK, "private-upstream-result-marker")
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+
+        let path = std::env::temp_dir().join(format!("ter-write-failure-{}.db", Uuid::new_v4()));
+        let database_url = format!("sqlite://{}?mode=rwc", path.display());
+        let mut config = Config::test();
+        config.database_url = database_url.clone();
+        config.upstream_base_url = Some(format!("http://{address}"));
+        let router = build(config).await.unwrap();
+
+        let sabotage = db::connect(&database_url).await.unwrap();
+        sqlx::query("DROP TABLE receipts")
+            .execute(&sabotage)
+            .await
+            .unwrap();
+        sabotage.close().await;
+
+        let body = json!({"endpoint":"/api/logs/export","start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:30:00Z","row_limit":10,"fields":["message"],"redaction_policy":"pii-basic","purpose":"receipt failure audit"});
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/exports")
+                    .header("content-type", "application/json")
+                    .header("x-ter-admin-token", "test-admin-token")
+                    .header("x-export-user", "audit@example.com")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(upstream_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let response_body = to_bytes(response.into_body(), 64_000).await.unwrap();
+        let response_json: Value = serde_json::from_slice(&response_body).unwrap();
+        assert_eq!(response_json["error"]["code"], "receipt_write_failed");
+        assert_eq!(response_json["receipt_id"], Value::Null);
+        assert!(!String::from_utf8_lossy(&response_body).contains("private-upstream-result-marker"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
     // @claim:recorded-exports
     #[tokio::test]
     async fn claim_allowed_denied_and_upstream_failed_exports_have_signed_receipts() {

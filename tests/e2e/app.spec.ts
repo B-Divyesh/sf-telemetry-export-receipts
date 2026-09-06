@@ -22,7 +22,32 @@ test('public dashboard protects the receipt ledger and supports keyboard access'
   expect(consoleErrors).toEqual([])
 })
 
-test('@claim:administrator-access administrator token opens the real isolated ledger without persistent browser storage', async ({ page }) => {
+test('@claim:administrator-access anonymous receipt reads and exports are denied while the browser keeps administrator access in the current tab', async ({ page, request }) => {
+  const anonymousRead = await request.get('/api/v1/receipts', {
+    headers: { 'X-Forwarded-For': '198.51.100.120' },
+  })
+  expect(anonymousRead.status()).toBe(401)
+  await expect(anonymousRead.json()).resolves.toMatchObject({ error: { code: 'admin_access_required' } })
+
+  const anonymousExport = await request.post('/api/v1/exports', {
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Export-User': 'untrusted@example.com',
+      'X-Forwarded-For': '198.51.100.121',
+    },
+    data: {
+      endpoint: '/api/logs/export',
+      start: '2026-01-01T00:00:00Z',
+      end: '2026-01-01T00:30:00Z',
+      row_limit: 10,
+      fields: ['message'],
+      redaction_policy: 'pii-basic',
+      purpose: 'anonymous access check',
+    },
+  })
+  expect(anonymousExport.status()).toBe(401)
+  await expect(anonymousExport.json()).resolves.toMatchObject({ error: { code: 'admin_access_required' }, receipt_id: null })
+
   await page.goto('/')
   await page.getByLabel('Administrator token').fill(adminToken)
   await page.getByRole('button', { name: 'Open receipt desk' }).click()
@@ -82,6 +107,24 @@ test('@claim:paid-license-unlock a returned or restored valid license unlocks th
   await page.getByLabel('License token').fill('restored-license-token')
   await page.getByRole('button', { name: 'Verify license' }).click()
   await expect(page.getByRole('button', { name: 'Download JSON archive' })).toBeVisible()
+})
+
+test('@claim:revoked-license-lock a refunded license response locks the archive while the free receipt desk remains available', async ({ page }) => {
+  await page.route('https://api.sociobot.in/api/v1/products/telemetry-export-receipts/verify?license=*', async route => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ valid: false, reason: 'revoked', expires_at: null }),
+    })
+  })
+
+  await page.goto('/?license=refunded-license-token')
+  await expect(page).toHaveURL('/')
+  await expect(page.locator('#license-status')).toHaveText('License no longer active')
+  await expect(page.getByRole('button', { name: 'Download JSON archive' })).toBeHidden()
+  await expect(page.getByRole('link', { name: /Buy one-time license/ })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Administrator access required' })).toBeVisible()
+  const verdict = await page.evaluate(() => JSON.parse(localStorage.getItem('sb_license:telemetry-export-receipts:verdict') || '{}'))
+  expect(verdict.valid).toBe(false)
 })
 
 test('@claim:demo-sandbox the landing action opens isolated sample receipts without storage or third-party requests', async ({ page }) => {
