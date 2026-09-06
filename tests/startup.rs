@@ -9,6 +9,7 @@ use std::{
 };
 use uuid::Uuid;
 
+// @claim:port-only-startup
 #[test]
 fn port_only_startup_generates_and_reports_configuration_sources() {
     let root = std::env::temp_dir().join(format!("ter-port-only-{}", Uuid::new_v4()));
