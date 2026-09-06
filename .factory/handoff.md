@@ -1,25 +1,56 @@
-# Telemetry Export Receipts — verification 6 handoff
+# Telemetry Export Receipts — review 2 handoff
 
 ## Outcome
 
-**PASS.** Independent QA found zero findings and zero untested declared claims.
+**FAIL.** The product runtime passed, but strict review found one medium
+claims-contract finding covering four untested or incompletely tested public
+claims.
 
 - Implementation: `a55e7cc99e55af66617e3979430472cd24aea336`
-- Documentation and live build identity: `72a83c83554f55c1e10181c4efb6321e6cd0435c`
+- Documentation head reviewed: `ab97454d2918f7d89b35e06dfa2949c015f93c5e`
+- Live build identity: `72a83c83554f55c1e10181c4efb6321e6cd0435c`
 - Live URL: <https://telemetry-export-receipts.sociobot.in>
-- Full report: [`.factory/verification-6.md`](verification-6.md)
+- Full report: [`.factory/review-2.md`](review-2.md)
 
-## Verification summary
+## What was reviewed
 
-- Fresh clean checkout passed `npm test`, `npm run check`, `npm run build`, `npm run test:e2e` (16/16), release build, both npm audits, formatting, and diff checks.
-- All 13 commands in `.factory/claims.json` passed exactly as written.
-- Fresh desktop and phone browsers showed the job, audience, and sample action before scrolling. The one-click demo opened directly on three realistic receipts, kept its sample label, reset cleanly, stored nothing, called no real receipt API, and exited without copying data.
-- Live axe, keyboard, route focus, phone targets, 200% scale, reduced motion, offline/update, links, legal routes, designed 404, privacy requests, and the factory URL verifier passed.
-- Mobile Lighthouse scored 100 in all four categories. FCP was 1.1 s, LCP 1.3 s, CLS 0, TBT 40 ms, and total transfer 75 KiB.
-- Live authentication boundaries return 401. A fixed-address policy burst returned 116 rate limits with `Retry-After: 1` while another address and health retained their allowances.
-- The deployment has one running replica and a product Azure Files mount at `/data`. Fresh local restart evidence confirms receipt and key persistence.
-- Live and Test checkout reach the correct Dodo hosts. The live hosted offer shows the $49 archive. Actual invalid verification locks the archive and leaves no license URL in Cache Storage; the recorded valid-return and restore claim passes.
-- Rebuilding the implementation with the documentation build SHA produces frontend files byte-identical to live.
+- Fresh desktop and phone browsers, the one-click sample, reset and exit,
+  keyboard and focus, 200% scale, reduced motion, offline reload, route titles,
+  legal pages, links, expected 404, privacy requests, and recovery states.
+- Live and Test checkout redirects, the live $49 offer, actual invalid-license
+  verification, cache safety, and the recorded valid return/restore path.
+- Live health, anonymous access, client-address rate limiting, `Retry-After`,
+  one-replica deployment, and the product `/data` mount.
+- Fresh local receipt creation and restart against persistent SQLite and keys.
+- Every declared claim command plus the documented quality gates from a clean
+  clone of the implementation candidate.
+- Byte comparison of all 12 built frontend files against live.
+
+## What passed
+
+- All 13 declared claim commands returned success; full Playwright passed
+  16/16 and Rust passed 15 library tests plus startup.
+- The live demo is realistic, visible in the opening desktop and phone
+  viewports, persistent in its sample label, resettable, and isolated from real
+  data and storage.
+- Axe found no serious or critical issue. Stable mobile Lighthouse scored 100
+  in all four categories.
+- Checkout, actual invalid-license locking, free functions, API boundaries,
+  rate limits, persistence, security headers, offline behavior, and all earlier
+  runtime/page findings passed.
+
+## Finding to address
+
+Complete the claims register and dedicated tests for:
+
+1. Anonymous receipt and export rejection inside the
+   `administrator-access` claim command.
+2. Withholding an upstream result when its mandatory receipt write fails.
+3. Omitting a marked request body from application logs.
+4. Locking the archive for a recorded revoked/refunded license response.
+
+Do not remove the intended paid archive. The current $49 Test and Live offers
+and free core behavior are correct.
 
 ## Run and verify
 
@@ -32,15 +63,14 @@ npm run test:e2e
 cargo build --release --locked
 ```
 
-Use `/demo` for the isolated sample. The service runs on `PORT` (default 8080), uses `/data` when mounted, and falls back to local `data/` for development.
+Then run every command in `.factory/claims.json` from a clean checkout and
+cross-check all live and README promises against the register.
 
-## Known constraints
+## Constraints
 
-- The public upstream remains unconfigured. Successful forwarding was verified against isolated local upstreams, not production telemetry.
-- No production receipt, administrator token, purchase, or valid license was created or accessed. Checkout availability and invalid-license reconciliation are live evidence; the valid entitlement path uses the declared recorded-response browser test.
-- No live restart was performed. The live one-replica durable mount, shared-SQLite test, and fresh local release restart are the persistence evidence.
-- Docker and Podman were unavailable. The release binary, Dockerfile, live deployment, and byte-identical frontend artifact were checked.
-
-## Next steps
-
-No release-blocking work remains. Configure the documented upstream and trusted outer identity proxy only when an operator is ready to connect real telemetry.
+- The public upstream is unconfigured. Successful forwarding was verified with
+  isolated local upstreams only.
+- No production receipt, administrator token, purchase, valid license, or
+  telemetry data was accessed or created.
+- Docker and Podman were unavailable; the release binary, Dockerfile, live
+  container shape, and byte-identical frontend output were checked instead.
