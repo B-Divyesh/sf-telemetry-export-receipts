@@ -1,68 +1,46 @@
-# Telemetry Export Receipts — repair 5 handoff
+# Telemetry Export Receipts — verification 6 handoff
 
 ## Outcome
 
-**PASS.** The two strict-review findings are repaired in the deployed product.
+**PASS.** Independent QA found zero findings and zero untested declared claims.
 
-- Implementation SHA: `a55e7cc99e55af66617e3979430472cd24aea336`
-- Product UI repair: `875d2ea20f62f7a21ccccd43d7d5e155f17b98f1`
-- Documentation SHA: current repository `HEAD` at handoff
+- Implementation: `a55e7cc99e55af66617e3979430472cd24aea336`
+- Documentation and live build identity: `72a83c83554f55c1e10181c4efb6321e6cd0435c`
 - Live URL: <https://telemetry-export-receipts.sociobot.in>
+- Full report: [`.factory/verification-6.md`](verification-6.md)
 
-## What changed
+## Verification summary
 
-1. The landing action now says that it loads allowed, denied, and upstream-error sample receipts.
-2. `/demo` now opens on a compact sample receipt desk instead of repeating the landing hero. The sample banner, reset action, exit action, filters, and realistic populated receipts remain isolated from real data.
-3. The landing page now includes **How it works** with request, policy check, and signed receipt steps. It also includes **What it does not do** before the paid offer: no telemetry or result bodies, no replacement for upstream permissions, and no telemetry dashboards.
-4. Browser regressions cover the one-click journey at 1440 × 900 and 390 × 844, the first visible sample receipt, the persistent demo label, reset, isolated browser storage, and the landing section order.
-5. The rate-limit claim test now drains a token bucket until it observes the public outcome (429 plus `Retry-After`) instead of assuming a fixed request count. This removes normal refill-timing flakiness without changing production rate limiting.
+- Fresh clean checkout passed `npm test`, `npm run check`, `npm run build`, `npm run test:e2e` (16/16), release build, both npm audits, formatting, and diff checks.
+- All 13 commands in `.factory/claims.json` passed exactly as written.
+- Fresh desktop and phone browsers showed the job, audience, and sample action before scrolling. The one-click demo opened directly on three realistic receipts, kept its sample label, reset cleanly, stored nothing, called no real receipt API, and exited without copying data.
+- Live axe, keyboard, route focus, phone targets, 200% scale, reduced motion, offline/update, links, legal routes, designed 404, privacy requests, and the factory URL verifier passed.
+- Mobile Lighthouse scored 100 in all four categories. FCP was 1.1 s, LCP 1.3 s, CLS 0, TBT 40 ms, and total transfer 75 KiB.
+- Live authentication boundaries return 401. A fixed-address policy burst returned 116 rate limits with `Retry-After: 1` while another address and health retained their allowances.
+- The deployment has one running replica and a product Azure Files mount at `/data`. Fresh local restart evidence confirms receipt and key persistence.
+- Live and Test checkout reach the correct Dodo hosts. The live hosted offer shows the $49 archive. Actual invalid verification locks the archive and leaves no license URL in Cache Storage; the recorded valid-return and restore claim passes.
+- Rebuilding the implementation with the documentation build SHA produces frontend files byte-identical to live.
 
-## Verification
-
-From a detached clean checkout at `a55e7cc` after `npm ci --no-audit --no-fund`:
+## Run and verify
 
 ```sh
+npm ci --no-audit --no-fund
 npm test
 npm run check
 npm run build
 npm run test:e2e
 cargo build --release --locked
-npm audit --audit-level=high
-npm audit --omit=dev --audit-level=high
-cargo fmt --all -- --check
-git diff --check
 ```
 
-All commands passed. `npm test` ran Vitest plus 15 Rust tests and the startup test. `npm run test:e2e` passed 16 browser tests. Every one of the 13 commands declared in `.factory/claims.json` also passed exactly as written from the clean checkout. The rate-limit claim passed five additional consecutive local runs.
-
-The deployed image was built from `a55e7cc`. Live `/health` returns that full SHA. Rebuilding with the same `VITE_BUILD_SHA` produced JavaScript and CSS byte-identical to the live assets.
-
-Fresh live browser checks before scrolling found:
-
-- Job: **Record every telemetry export.**
-- Audience: observability teams that need bounded downloads and an attributable requester record.
-- First action: **Try it with sample data**.
-
-After that action, the first sample receipt begins at 808 px on a 1440 × 900 desktop viewport and 590 px on a 390 × 844 phone viewport. Both views keep the demo banner and had no console errors. The sample reset restored all three records without browser storage or receipt API traffic.
-
-Live `verify-url.sh` passed. Axe 4.12.1 found no serious or critical issues on `/`, `/demo`, `/privacy`, `/terms`, or the designed `/missing-page` 404. The deliberate 404 returned HTTP 404 and is not a defect.
-
-Anonymous receipt reads and forged-identity exports return 401. A 120-request live policy burst returned 104 × 200 and 16 × 429; a captured 429 included `Retry-After: 1`. The deployment has one minimum and one maximum replica and mounts its Azure Files product share at `/data`.
-
-The live checkout returns 303 to the Dodo-hosted checkout. The live verify endpoint returns `valid:false, reason:invalid` and `Cache-Control: no-store` for a synthetic invalid token. A fresh browser strips that token from the URL, keeps Fleet archive locked, and has no license-bearing cache entry. The registered offer metadata is in `/work/.evidence/billing-offer.json`.
-
-## Run and deploy
-
-```sh
-npm ci --no-audit --no-fund
-npm run build
-cargo run
-```
-
-The service listens on `PORT` (default 8080). It creates and uses `/data` when mounted, or local `data/` for development. Use `/demo` for the isolated sample. Deploy with the container helper and `WO_DATA_DIR=/data`; keep the product at one replica because its SQLite database and generated keys share that durable boundary.
+Use `/demo` for the isolated sample. The service runs on `PORT` (default 8080), uses `/data` when mounted, and falls back to local `data/` for development.
 
 ## Known constraints
 
-- The public upstream remains intentionally unconfigured. Successful export forwarding was verified against isolated local upstreams, not with production telemetry.
-- No production administrator token, receipt, purchase, or valid license token was created or read. Live durable receipt continuity was therefore not re-tested with production data after this deploy; the clean Rust restart/persistence coverage and prior verification remain the non-production evidence.
-- The $49 one-time offer is registered and reachable. A genuine paid entitlement requires a buyer-returned license token; checkout redirect alone is not treated as entitlement proof.
+- The public upstream remains unconfigured. Successful forwarding was verified against isolated local upstreams, not production telemetry.
+- No production receipt, administrator token, purchase, or valid license was created or accessed. Checkout availability and invalid-license reconciliation are live evidence; the valid entitlement path uses the declared recorded-response browser test.
+- No live restart was performed. The live one-replica durable mount, shared-SQLite test, and fresh local release restart are the persistence evidence.
+- Docker and Podman were unavailable. The release binary, Dockerfile, live deployment, and byte-identical frontend artifact were checked.
+
+## Next steps
+
+No release-blocking work remains. Configure the documented upstream and trusted outer identity proxy only when an operator is ready to connect real telemetry.
